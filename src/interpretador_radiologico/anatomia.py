@@ -258,6 +258,14 @@ class Anatomia:
             largura_torax_cm=cm_t,
         )
 
+    def parece_torax(self) -> bool:
+        """Dois campos pulmonares de tamanho plausível foram segmentados."""
+        if not self.segmentada:
+            return False
+        direito = float(self.mascara("pulmao_direito").mean())
+        esquerdo = float(self.mascara("pulmao_esquerdo").mean())
+        return min(direito, esquerdo) >= 0.04 and direito + esquerdo >= 0.12
+
     # ------------------------------------------------------------------ #
     def avisos_qualidade(self) -> list[str]:
         """Verificações de plausibilidade da imagem com base na anatomia."""

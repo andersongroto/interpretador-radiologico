@@ -14,9 +14,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .. import AVISO_LEGAL, __version__, preferencias
-from ..analisador import AnalisadorTorax, ExameIncompativel
+from ..analisador import Analisador, ExameIncompativel
 from ..dicom_io import ErroLeitura, carregar_exame
+from ..motor_nuvem import ErroNuvem
 from ..pipeline import Saidas, nome_base, processar
+from ..regioes import REGIOES
 from ..visualizacao import mapa_rgba, png_bytes
 
 ESTATICOS = Path(__file__).parent / "static"
@@ -43,7 +45,7 @@ def _carga_util(identificador: str, saidas: Saidas) -> dict:
     }
 
 
-def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 20,
+def criar_app(analisador: Analisador | None = None, max_resultados: int = 20,
               exemplo: Path | None = None,
               preferencias_caminho: str | Path | bool | None = None) -> FastAPI:
     """Cria a aplicação FastAPI. Os resultados ficam apenas em memória.
@@ -52,7 +54,7 @@ def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 2
     ``preferencias_caminho``: habilita a tela de configurações persistentes
     (True = local padrão no perfil do usuário).
     """
-    analisador = analisador or AnalisadorTorax()
+    analisador = analisador or Analisador()
     caminho_prefs = None
     if preferencias_caminho:
         caminho_prefs = (preferencias.caminho_padrao() if preferencias_caminho is True
@@ -97,30 +99,38 @@ def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 2
             "limiares": {"positivo": cfg.limiar_positivo, "indeterminado": cfg.limiar_indeterminado},
             "exemplo": exemplo is not None,
             "configuravel": caminho_prefs is not None,
+            "nuvem": cfg.usar_nuvem,
+            "regioes": [{"chave": r.chave, "nome": r.nome} for r in REGIOES.values()],
             "aviso_legal": AVISO_LEGAL,
         }
 
-    def executar(dados: bytes, nome: str, forcar: bool, anonimizar: bool) -> JSONResponse:
+    def executar(dados: bytes, nome: str, forcar: bool, anonimizar: bool,
+                 regiao: str = "") -> JSONResponse:
+        if regiao and regiao not in REGIOES:
+            raise HTTPException(400, {"mensagem": f"Região desconhecida: {regiao}", "acao": None})
         try:
             exame = carregar_exame(dados, nome)
             config = replace(analisador.config, forcar=forcar or analisador.config.forcar,
-                             anonimizar=anonimizar or analisador.config.anonimizar)
+                             anonimizar=anonimizar or analisador.config.anonimizar,
+                             regiao=regiao or analisador.config.regiao)
             saidas = processar(exame, analisador, config=config)
         except ErroLeitura as exc:
-            raise HTTPException(400, str(exc)) from exc
+            raise HTTPException(400, {"mensagem": str(exc), "acao": None}) from exc
         except ExameIncompativel as exc:
-            raise HTTPException(422, str(exc)) from exc
+            raise HTTPException(422, {"mensagem": str(exc), "acao": exc.acao}) from exc
+        except ErroNuvem as exc:
+            raise HTTPException(502, {"mensagem": f"IA em nuvem: {exc}", "acao": "configurar_nuvem"}) from exc
         return JSONResponse(_carga_util(guardar(saidas), saidas))
 
     @app.post("/api/analisar")
     def analisar(arquivo: UploadFile = File(...), forcar: bool = Form(False),
-                 anonimizar: bool = Form(False)) -> JSONResponse:
-        return executar(arquivo.file.read(), arquivo.filename or "exame", forcar, anonimizar)
+                 anonimizar: bool = Form(False), regiao: str = Form("")) -> JSONResponse:
+        return executar(arquivo.file.read(), arquivo.filename or "exame", forcar, anonimizar, regiao)
 
     @app.post("/api/exemplo")
     def analisar_exemplo(anonimizar: bool = Form(False)) -> JSONResponse:
         if exemplo is None:
-            raise HTTPException(404, "Nenhum exame de exemplo disponível.")
+            raise HTTPException(404, {"mensagem": "Nenhum exame de exemplo disponível.", "acao": None})
         return executar(Path(exemplo).read_bytes(), Path(exemplo).name, False, anonimizar)
 
     @app.get("/api/configuracoes")

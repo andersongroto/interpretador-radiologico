@@ -46,6 +46,7 @@ jobs:
 
       - name: Autoteste do executável
         shell: pwsh
+        timeout-minutes: 10
         run: |
           $saida = Join-Path $env:RUNNER_TEMP "autoteste"
           $p = Start-Process -FilePath "dist\InterpretadorRadiologico\InterpretadorRadiologico.exe" `

@@ -97,7 +97,7 @@ def test_exame_incompativel_e_forcar(caminho_dicom, analisador_falso):
     with pytest.raises(ExameIncompativel, match="KNEE"):
         analisador_falso().analisar(exame)
     resultado = analisador_falso(forcar=True).analisar(exame)
-    assert any("forçada" in a for a in resultado.avisos)
+    assert any("sem validade" in a for a in resultado.avisos)
 
 
 def test_avisos_de_incidencia_e_idade(caminho_dicom, analisador_falso):

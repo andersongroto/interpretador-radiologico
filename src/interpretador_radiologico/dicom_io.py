@@ -16,18 +16,6 @@ from PIL import Image
 from pydicom.dataset import Dataset
 from pydicom.pixels import apply_modality_lut, apply_voi_lut
 
-MODALIDADES_RADIOGRAFIA = {"CR", "DX", "DR", "RG", "OT"}
-
-_PALAVRAS_TORAX = {"TORAX", "THORAX", "CHEST", "PULMAO", "PULMOES", "PULMONAR", "LUNG",
-                   "LUNGS", "TORACICO", "TORACICA", "PEITO", "TX", "CXR", "RXT"}
-_PALAVRAS_OUTRAS = {
-    "CRANIO", "SKULL", "HEAD", "CABECA", "FACE", "SEIOS", "SINUS", "MAO", "MAOS", "HAND",
-    "PUNHO", "WRIST", "COTOVELO", "ELBOW", "OMBRO", "SHOULDER", "UMERO", "HUMERUS",
-    "ANTEBRACO", "FOREARM", "JOELHO", "KNEE", "PE", "PES", "FOOT", "TORNOZELO", "ANKLE",
-    "FEMUR", "PERNA", "LEG", "TIBIA", "BACIA", "PELVIS", "PELVE", "QUADRIL", "HIP",
-    "COLUNA", "SPINE", "LSPINE", "CSPINE", "TSPINE", "ABDOMEN", "ABD", "ABDOME",
-    "DENTAL", "PANORAMICA", "MANDIBULA", "CALCANEO", "DEDO", "DEDOS", "FINGER",
-}
 _INCIDENCIAS_PERFIL = {"LL", "RL", "LAT", "LATERAL", "LLD", "RLD", "PERFIL"}
 
 _SEXO = {"M": "Masculino", "F": "Feminino", "O": "Outro"}
@@ -55,6 +43,7 @@ class Metadados:
     modalidade: str | None = None
     regiao: str | None = None
     incidencia: str | None = None
+    lateralidade: str | None = None  # "direito", "esquerdo" ou "bilateral"
     descricao_estudo: str | None = None
     descricao_serie: str | None = None
     fabricante: str | None = None
@@ -197,6 +186,26 @@ def _incidencia(ds: Dataset) -> str | None:
     return None
 
 
+_DIREITA = {"DIREITO", "DIREITA", "DIR", "RIGHT"}
+_ESQUERDA = {"ESQUERDO", "ESQUERDA", "ESQ", "LEFT"}
+_BILATERAL = {"BILATERAL", "AMBOS", "AMBAS", "BOTH"}
+
+
+def lateralidade(codigo: str | None, *descricoes: str | None) -> str | None:
+    """Lado do exame a partir de ImageLaterality/Laterality (R/L/B) ou das descrições."""
+    codigo = (codigo or "").strip().upper()
+    if codigo in ("R", "L", "B"):
+        return {"R": "direito", "L": "esquerdo", "B": "bilateral"}[codigo]
+    palavras = _palavras(*descricoes)
+    if palavras & _BILATERAL or (palavras & _DIREITA and palavras & _ESQUERDA):
+        return "bilateral"
+    if palavras & _DIREITA:
+        return "direito"
+    if palavras & _ESQUERDA:
+        return "esquerdo"
+    return None
+
+
 def _espacamento(ds: Dataset) -> tuple[float, float] | None:
     for chave in ("PixelSpacing", "ImagerPixelSpacing"):
         valor = ds.get(chave)
@@ -229,6 +238,9 @@ def extrair_metadados(ds: Dataset) -> Metadados:
         modalidade=(_texto(ds.get("Modality")) or "").upper() or None,
         regiao=_texto(ds.get("BodyPartExamined")),
         incidencia=_incidencia(ds),
+        lateralidade=lateralidade(_texto(ds.get("ImageLaterality")) or _texto(ds.get("Laterality")),
+                                  _texto(ds.get("SeriesDescription")), _texto(ds.get("StudyDescription")),
+                                  _texto(ds.get("ProtocolName"))),
         descricao_estudo=_texto(ds.get("StudyDescription")),
         descricao_serie=_texto(ds.get("SeriesDescription")),
         fabricante=_texto(ds.get("Manufacturer")),
@@ -403,44 +415,3 @@ def _carregar_imagem_comum(dados: bytes) -> np.ndarray:
             return _normalizar_percentis(np.asarray(img, dtype=np.float32), 0.0, 100.0)
         cinza = np.asarray(img.convert("L"), dtype=np.float32) / 255.0
     return cinza
-
-
-# --------------------------------------------------------------------------- #
-# Compatibilidade
-# --------------------------------------------------------------------------- #
-
-def verificar_compatibilidade(meta: Metadados) -> tuple[bool | None, str | None]:
-    """Verifica se o exame é uma radiografia de tórax.
-
-    Retorna (True, None) se compatível, (False, motivo) se incompatível e
-    (None, aviso) quando não há informação suficiente para decidir.
-    """
-    if meta.modalidade and meta.modalidade not in MODALIDADES_RADIOGRAFIA:
-        return False, (
-            f"Modalidade {meta.modalidade} não suportada: o sistema interpreta apenas "
-            "radiografias (CR/DX)."
-        )
-
-    regiao = _palavras(meta.regiao)
-    descricoes = _palavras(meta.descricao_estudo, meta.descricao_serie)
-    if regiao & _PALAVRAS_TORAX:
-        return True, None
-    if regiao & _PALAVRAS_OUTRAS:
-        return False, _motivo_regiao(meta.regiao)
-    if descricoes & _PALAVRAS_TORAX:
-        return True, None
-    if descricoes & _PALAVRAS_OUTRAS:
-        return False, _motivo_regiao(meta.descricao_estudo or meta.descricao_serie)
-    if meta.modalidade is None and meta.regiao is None:
-        return None, None  # imagem comum (não-DICOM): aviso já registrado
-    return None, (
-        "Região anatômica não informada no DICOM; a imagem foi analisada como "
-        "radiografia de tórax."
-    )
-
-
-def _motivo_regiao(descricao: str | None) -> str:
-    return (
-        f"Região anatômica \"{descricao}\" não suportada: o modelo atual interpreta "
-        "apenas radiografias de tórax (incidências PA/AP)."
-    )

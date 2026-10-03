@@ -39,6 +39,9 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .marca p { margin: 0; font-size: 12px; color: var(--suave); }
 .acoes-topo { display: flex; align-items: center; gap: 14px; }
 .opcao { display: flex; align-items: center; gap: 6px; color: var(--suave); font-size: 13px; cursor: pointer; }
+.seletor select, .dialogo select {
+  padding: 6px 8px; border-radius: 8px; border: 1px solid var(--borda); background: var(--painel-2); color: var(--texto);
+}
 
 .botao {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
@@ -185,3 +188,32 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   .area { min-height: 62vh; }
   .topo { flex-wrap: wrap; }
 }
+
+/* Região/motor, exemplo e configurações -------------------------------- */
+.botao.exemplo { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); }
+.motor { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: var(--suave); }
+.motor b { color: var(--texto); font-size: 15px; }
+.motor .etiqueta { margin-left: 0; }
+.etiqueta.local { background: rgba(79, 163, 255, .16); color: #9ccbff; }
+.etiqueta.nuvem { background: rgba(186, 104, 200, .18); color: #e1b5ea; }
+.cartao .descricao { grid-column: 2 / 4; font-size: 12.5px; color: #c9d1db; }
+.titulo-laudo { font-size: 14px; margin: 12px 0 0; color: #cfe5ff; letter-spacing: .3px; }
+.linha-ia { display: flex; justify-content: space-between; gap: 10px; padding: 7px 2px; border-bottom: 1px solid #1f262f; font-size: 13px; }
+
+.dialogo {
+  width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto;
+  border: 1px solid var(--borda); border-radius: 14px; background: var(--painel); color: var(--texto); padding: 0;
+}
+.dialogo::backdrop { background: rgba(0, 0, 0, .6); }
+.dialogo form { padding: 18px 20px 20px; }
+.dialogo h2 { margin: 0 0 8px; font-size: 18px; }
+.dialogo fieldset { border: 1px solid var(--borda); border-radius: 10px; margin: 12px 0; padding: 10px 14px 14px; }
+.dialogo legend { padding: 0 6px; color: var(--suave); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.dialogo label { display: block; margin-top: 10px; font-size: 13px; }
+.dialogo label.linha { display: flex; gap: 8px; align-items: flex-start; }
+.dialogo input[type=password], .dialogo input[type=number], .dialogo input:not([type]), .dialogo select {
+  display: block; width: 100%; margin-top: 4px; padding: 7px 10px; border-radius: 8px;
+  border: 1px solid var(--borda); background: #0f141a; color: var(--texto);
+}
+.dialogo .dupla { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.erro-form { color: #ffb3bf; font-size: 13px; }

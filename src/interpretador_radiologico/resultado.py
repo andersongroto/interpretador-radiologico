@@ -16,11 +16,16 @@ INDETERMINADO = "indeterminado"
 NEGATIVO = "negativo"
 
 
+MOTOR_LOCAL = "local"
+MOTOR_NUVEM = "nuvem"
+CONFIANCA_ROTULO = {"alta": "confiança alta", "moderada": "confiança moderada", "baixa": "confiança baixa"}
+
+
 @dataclass
 class Achado:
     chave: str
     nome: str
-    escore: float
+    escore: float | None  # escore do classificador local; None para a IA em nuvem
     status: str
     cor: str
     gravidade: int
@@ -28,20 +33,35 @@ class Achado:
     local: str = ""
     suprimido: bool = False  # redundante frente a um achado mais específico
     mapa: np.ndarray | None = None  # uint8 [0, 255] na resolução de exibição
+    # Campos preenchidos pela IA em nuvem
+    confianca: str | None = None  # "alta", "moderada" ou "baixa"
+    descricao: str = ""
+    frase_impressao: str = ""
+    recomendacao: str = ""
 
     @property
     def relevante(self) -> bool:
         return self.status != NEGATIVO
 
+    @property
+    def rotulo_confianca(self) -> str:
+        """Texto curto para rótulos: "63%" (escore) ou "confiança alta"."""
+        if self.escore is not None:
+            return f"{self.escore:.0%}"
+        return CONFIANCA_ROTULO.get(self.confianca or "", "")
+
     def para_dict(self, escala: float = 1.0) -> dict:
         return {
             "chave": self.chave,
             "nome": self.nome,
-            "escore": round(float(self.escore), 4),
+            "escore": None if self.escore is None else round(float(self.escore), 4),
+            "confianca": self.confianca,
+            "rotulo_confianca": self.rotulo_confianca,
             "status": self.status,
             "cor": self.cor,
             "gravidade": self.gravidade,
             "local": self.local,
+            "descricao": self.descricao,
             "suprimido": self.suprimido,
             "regioes": [r.para_dict(escala) for r in self.regioes],
         }
@@ -61,6 +81,11 @@ class ResultadoAnalise:
     modelo: dict = field(default_factory=dict)
     data_analise: str = ""
     tempo_s: float = 0.0
+    regiao: str = "torax"  # chave de regioes.REGIOES
+    regiao_nome: str = "Tórax"
+    lado_exame: str | None = None
+    motor: str = MOTOR_LOCAL
+    interpretacao: dict | None = None  # resposta estruturada da IA em nuvem
 
     def com_status(self, *status: str, incluir_suprimidos: bool = False) -> list[Achado]:
         return [a for a in self.achados
@@ -80,6 +105,11 @@ class ResultadoAnalise:
     def para_dict(self) -> dict:
         return {
             "arquivo": self.nome_arquivo,
+            "regiao": self.regiao,
+            "regiao_nome": self.regiao_nome,
+            "lado_exame": self.lado_exame,
+            "motor": self.motor,
+            "interpretacao": self.interpretacao,
             "data_analise": self.data_analise,
             "tempo_s": round(self.tempo_s, 2),
             "metadados": self.metadados.para_dict(),

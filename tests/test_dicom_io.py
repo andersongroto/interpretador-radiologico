@@ -6,7 +6,7 @@ from PIL import Image
 
 from interpretador_radiologico.dicom_io import (ErroLeitura, Metadados, carregar_exame,
                                                 formatar_data, formatar_idade, formatar_nome,
-                                                janelar, verificar_compatibilidade)
+                                                janelar, lateralidade)
 from interpretador_radiologico.exemplo import imagem_para_dicom
 
 from .conftest import torax_sintetico
@@ -98,18 +98,24 @@ def test_arquivos_invalidos(tmp_path):
         carregar_exame(caminho)
 
 
-@pytest.mark.parametrize("campos, esperado", [
-    ({"modalidade": "DX", "regiao": "CHEST"}, True),
-    ({"modalidade": "CR", "regiao": None, "descricao_estudo": "RX DE TÓRAX PA E PERFIL"}, True),
-    ({"modalidade": "DX", "regiao": "KNEE"}, False),
-    ({"modalidade": "CR", "descricao_estudo": "RX MAO ESQUERDA"}, False),
-    ({"modalidade": "CT", "regiao": "CHEST"}, False),
-    ({"modalidade": "DX"}, None),
-    ({}, None),
+@pytest.mark.parametrize("codigo, descricoes, esperado", [
+    ("R", (), "direito"),
+    ("L", ("JOELHO DIREITO",), "esquerdo"),
+    (None, ("RX JOELHO ESQUERDO AP",), "esquerdo"),
+    (None, ("RX TORAX PA E PERFIL",), None),  # "E" (conjunção) não é lateralidade
+    (None, ("Mãos direita e esquerda",), "bilateral"),
+    ("", ("RX PE DIREITO",), "direito"),
 ])
-def test_compatibilidade(campos, esperado):
-    compativel, _ = verificar_compatibilidade(Metadados(**campos))
-    assert compativel is esperado
+def test_lateralidade(codigo, descricoes, esperado):
+    assert lateralidade(codigo, *descricoes) == esperado
+
+
+def test_lateralidade_nos_metadados(tmp_path):
+    ds = imagem_para_dicom(torax_sintetico(64), regiao="KNEE")
+    ds.ImageLaterality = "R"
+    caminho = tmp_path / "joelho.dcm"
+    ds.save_as(caminho, enforce_file_format=True)
+    assert carregar_exame(caminho).metadados.lateralidade == "direito"
 
 
 def test_anonimizacao():

@@ -149,16 +149,21 @@ def gerar_pdf(laudo: Laudo, imagem_anotada: np.ndarray | None = None) -> bytes:
     ]))
 
     if imagem_anotada is not None:
+        legenda = ("Contornos contínuos: achados positivos; tracejados: baixa confiança. "
+                   "Mapas de calor indicam as regiões que mais influenciaram o modelo.")
+        if laudo.motor == "nuvem":
+            legenda = ("Retângulos indicam a localização aproximada dos achados apontada pela IA; "
+                       "tracejados: baixa confiança.")
         historia.append(KeepTogether([
             _secao("Imagem anotada", e),
             _imagem(imagem_anotada, largura_util, 13.5 * cm),
-            Paragraph("Contornos contínuos: achados positivos; tracejados: baixa confiança. "
-                      "Mapas de calor indicam as regiões que mais influenciaram o modelo.",
-                      e["pequeno"]),
+            Paragraph(legenda, e["pequeno"]),
         ]))
 
+    nuvem = laudo.motor == "nuvem"
     if laudo.escores:
-        cabecalho = ["Patologia", "Escore IA", "Resultado", "Localização"]
+        cabecalho = (["Achado", "Confiança", "Resultado", "Localização"] if nuvem
+                     else ["Patologia", "Escore IA", "Resultado", "Localização"])
         dados = [[Paragraph(f"<b>{c}</b>", e["tabela"]) for c in cabecalho]]
         estilo = [
             ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#C9D3DD")),
@@ -170,7 +175,8 @@ def gerar_pdf(laudo: Laudo, imagem_anotada: np.ndarray | None = None) -> bytes:
         for i, item in enumerate(laudo.escores, start=1):
             dados.append([
                 Paragraph(_limpar(item["nome"]), e["tabela"]),
-                Paragraph(f"{item['escore'] * 100:.0f}%", e["tabela"]),
+                Paragraph(f"{item['escore'] * 100:.0f}%" if item.get("escore") is not None
+                          else _limpar(item.get("confianca") or "—"), e["tabela"]),
                 Paragraph(_limpar(item["status"] + (" (redundante)" if item.get("suprimido") else "")),
                           e["tabela"]),
                 Paragraph(_limpar(item.get("local") or "—"), e["tabela"]),
@@ -181,11 +187,14 @@ def gerar_pdf(laudo: Laudo, imagem_anotada: np.ndarray | None = None) -> bytes:
                 estilo.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#FFF8E1")))
         tabela = Table(dados, colWidths=[4.6 * cm, 2.0 * cm, 2.6 * cm, largura_util - 9.2 * cm],
                        repeatRows=1, style=TableStyle(estilo))
-        historia += [_secao("Anexo — escores do classificador por patologia", e), tabela,
-                     Spacer(1, 3),
-                     Paragraph("Escores normalizados pelo ponto de operação de cada patologia "
-                               "(50% = limiar ótimo do treinamento); não são probabilidades "
-                               "clínicas calibradas.", e["pequeno"])]
+        if nuvem:
+            historia += [_secao("Anexo — achados apontados pela IA em nuvem", e), tabela]
+        else:
+            historia += [_secao("Anexo — escores do classificador por patologia", e), tabela,
+                         Spacer(1, 3),
+                         Paragraph("Escores normalizados pelo ponto de operação de cada patologia "
+                                   "(50% = limiar ótimo do treinamento); não são probabilidades "
+                                   "clínicas calibradas.", e["pequeno"])]
 
     historia += [Spacer(1, 8), Paragraph(_limpar(laudo.informacoes_modelo), e["pequeno"])]
 

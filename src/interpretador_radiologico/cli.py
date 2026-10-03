@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import AVISO_LEGAL, __version__
 from .config import Configuracao
+from .regioes import REGIOES
 
 EXTENSOES = {".dcm", ".dicom", ".dic", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 
@@ -31,6 +32,14 @@ def _argumentos_analise(p: argparse.ArgumentParser) -> None:
     g.add_argument("--forcar", action="store_true",
                    help="analisa mesmo exames de outra região/modalidade (resultados sem validade)")
     g.add_argument("--instituicao", help="nome do serviço no cabeçalho do laudo")
+    g.add_argument("--regiao", choices=sorted(REGIOES), metavar="REGIAO",
+                   help="região anatômica (padrão: automática pelo DICOM). Opções: "
+                        + ", ".join(sorted(REGIOES)))
+    g.add_argument("--nuvem", action="store_true",
+                   help="usa a IA em nuvem (Claude) nas regiões sem modelo local; requer a variável "
+                        "de ambiente ANTHROPIC_API_KEY. Envia apenas os pixels da imagem")
+    g.add_argument("--modelo-nuvem", default=Configuracao.modelo_nuvem,
+                   help="modelo da Anthropic para a IA em nuvem (padrão: %(default)s)")
 
 
 def _configuracao(args: argparse.Namespace) -> Configuracao:
@@ -45,6 +54,9 @@ def _configuracao(args: argparse.Namespace) -> Configuracao:
         anonimizar=args.anonimizar,
         forcar=args.forcar,
         nome_instituicao=args.instituicao,
+        regiao=args.regiao,
+        usar_nuvem=args.nuvem,
+        modelo_nuvem=args.modelo_nuvem,
     )
 
 
@@ -74,8 +86,9 @@ def coletar_arquivos(entradas: list[str]) -> list[Path]:
 
 
 def comando_analisar(args: argparse.Namespace) -> int:
-    from .analisador import AnalisadorTorax, ExameIncompativel
+    from .analisador import Analisador, ExameIncompativel
     from .dicom_io import ErroLeitura, carregar_exame
+    from .motor_nuvem import ErroNuvem
     from .pipeline import processar, salvar
     from .visualizacao import OpcoesVisualizacao
 
@@ -84,14 +97,14 @@ def comando_analisar(args: argparse.Namespace) -> int:
         print("Nenhum arquivo para analisar.", file=sys.stderr)
         return 1
     formatos = [f.strip().lower() for f in args.formatos.split(",") if f.strip()]
-    analisador = AnalisadorTorax(_configuracao(args))
+    analisador = Analisador(_configuracao(args))
     opcoes = OpcoesVisualizacao(anatomia=args.mostrar_anatomia)
     falhas = 0
     for caminho in arquivos:
         print(f"\n=== {caminho} ===", file=sys.stderr)
         try:
             saidas = processar(carregar_exame(caminho), analisador, opcoes)
-        except (ErroLeitura, ExameIncompativel) as exc:
+        except (ErroLeitura, ExameIncompativel, ErroNuvem) as exc:
             print(f"Não analisado: {exc}", file=sys.stderr)
             falhas += 1
             continue
@@ -109,10 +122,10 @@ def comando_analisar(args: argparse.Namespace) -> int:
 def comando_servidor(args: argparse.Namespace) -> int:
     import uvicorn
 
-    from .analisador import AnalisadorTorax
+    from .analisador import Analisador
     from .web.app import criar_app
 
-    analisador = AnalisadorTorax(_configuracao(args))
+    analisador = Analisador(_configuracao(args))
     if not args.carregar_sob_demanda:
         print("Carregando modelos (na primeira execução os pesos são baixados)...", file=sys.stderr)
         analisador.carregar()
@@ -131,9 +144,9 @@ def comando_exemplo(args: argparse.Namespace) -> int:
 
 
 def comando_baixar_modelos(args: argparse.Namespace) -> int:
-    from .analisador import AnalisadorTorax
+    from .analisador import Analisador
 
-    AnalisadorTorax(_configuracao(args)).carregar()
+    Analisador(_configuracao(args)).carregar()
     print("Modelos disponíveis localmente.")
     return 0
 
@@ -141,8 +154,9 @@ def comando_baixar_modelos(args: argparse.Namespace) -> int:
 def criar_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="interpretador-radiologico",
-        description="Interpretação assistida por IA de radiografias de tórax (DICOM): "
-                    "laudo estruturado e marcação dos achados na imagem.",
+        description="Interpretação assistida por IA de radiografias (DICOM): laudo estruturado "
+                    "e marcação dos achados na imagem. Tórax: modelos locais; demais regiões: "
+                    "IA em nuvem (opção --nuvem).",
         epilog=AVISO_LEGAL,
     )
     parser.add_argument("--versao", action="version", version=f"%(prog)s {__version__}")

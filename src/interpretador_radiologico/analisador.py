@@ -14,11 +14,14 @@ import numpy as np
 
 from .anatomia import ESTRUTURAS_PSPNET, Anatomia
 from .config import Configuracao
-from .dicom_io import Exame, verificar_compatibilidade
-from .localizacao import (descrever_local, extrair_regioes, mascara_da_regiao,
+from .dicom_io import Exame
+from .localizacao import (Regiao, descrever_local, extrair_regioes, mascara_da_regiao,
                           normalizar_mapa, regiao_de_mascara)
+from .motor_nuvem import InterpretacaoIA, MotorNuvem
 from .patologias import REGIAO_CORACAO, patologia
-from .resultado import INDETERMINADO, NEGATIVO, POSITIVO, Achado, ResultadoAnalise
+from .regioes import REGIOES, identificar_regiao, modalidade_aceita
+from .resultado import (INDETERMINADO, MOTOR_LOCAL, MOTOR_NUVEM, NEGATIVO, POSITIVO, Achado,
+                        ResultadoAnalise)
 
 # Deslocamentos (em pixels na entrada 224x224) usados para refinar os mapas de
 # ativação: a rede tem passo de 32 px, então deslocar meia célula e calcular a
@@ -27,7 +30,14 @@ DESLOCAMENTOS_REFINO = tuple((dy, dx) for dy in (-16, 0, 16) for dx in (-16, 0, 
 
 
 class ExameIncompativel(Exception):
-    """O exame não é uma radiografia de tórax suportada pelo modelo."""
+    """O exame não pode ser analisado com a configuração atual.
+
+    ``acao`` sugere o que o usuário pode fazer: "forcar", "configurar_nuvem" ou None.
+    """
+
+    def __init__(self, mensagem: str, acao: str | None = None):
+        super().__init__(mensagem)
+        self.acao = acao
 
 
 # --------------------------------------------------------------------------- #
@@ -262,12 +272,23 @@ def aplicar_supressao(achados: list[Achado], forma: tuple[int, int]) -> None:
 # Analisador
 # --------------------------------------------------------------------------- #
 
-class AnalisadorTorax:
-    """Analisa radiografias de tórax e produz um :class:`ResultadoAnalise`."""
+CORES_NUVEM = ("#FF5D73", "#FFB547", "#4FC3F7", "#9CCC65", "#BA68C8", "#26C6DA", "#FF8A65", "#FFEE58")
+_GRAVIDADE_NUVEM = {"urgente": 3, "relevante": 2, "leve": 1}
+_ORDEM_CONFIANCA = {"alta": 0, "moderada": 1, "baixa": 2}
 
-    def __init__(self, config: Configuracao | None = None, modelos: Modelos | None = None):
+
+class Analisador:
+    """Analisa radiografias e produz um :class:`ResultadoAnalise`.
+
+    Tórax: modelos locais (classificação, mapas de ativação e segmentação).
+    Demais regiões: IA multimodal em nuvem, quando habilitada na configuração.
+    """
+
+    def __init__(self, config: Configuracao | None = None, modelos: Modelos | None = None,
+                 motor_nuvem=None):
         self.config = config or Configuracao()
         self._modelos = modelos
+        self._motor_nuvem = motor_nuvem
         self._trava = threading.Lock()
 
     @property
@@ -276,25 +297,94 @@ class AnalisadorTorax:
             self._modelos = ModelosTorchXRayVision(self.config)
         return self._modelos
 
+    def motor_nuvem(self, config: Configuracao) -> MotorNuvem:
+        return self._motor_nuvem or MotorNuvem(config)
+
     def carregar(self) -> None:
         """Carrega (e baixa, se necessário) os pesos antecipadamente."""
         modelos = self.modelos
         if hasattr(modelos, "carregar"):
             modelos.carregar(self.config.usar_segmentacao)
 
+    # ------------------------------------------------------------------ #
     def analisar(self, exame: Exame, config: Configuracao | None = None) -> ResultadoAnalise:
         cfg = config or self.config
         inicio = time.perf_counter()
         meta = exame.metadados.anonimizado() if cfg.anonimizar else exame.metadados
         avisos = list(exame.avisos)
 
-        compativel, motivo = verificar_compatibilidade(meta)
-        if compativel is False:
+        aceita, motivo = modalidade_aceita(meta)
+        if not aceita:
             if not cfg.forcar:
-                raise ExameIncompativel(motivo)
+                raise ExameIncompativel(motivo, acao="forcar")
             avisos.append(f"{motivo} Análise forçada pelo usuário: resultados sem validade.")
-        elif motivo:
-            avisos.append(motivo)
+
+        imagem, escala = redimensionar_para_exibicao(exame.imagem, cfg.tamanho_exibicao)
+        geo = Geometria(*imagem.shape)
+        invertida = bool(meta.orientacao) and meta.orientacao[0].upper().startswith("R")
+        contexto = _Contexto(exame, meta, cfg, imagem, escala, geo, invertida, avisos, inicio)
+
+        if cfg.regiao:
+            if cfg.regiao not in REGIOES:
+                raise ValueError(f"Região desconhecida: {cfg.regiao}. Opções: {', '.join(REGIOES)}")
+            chave, fonte = cfg.regiao, "informada pelo usuário"
+        else:
+            chave, fonte = identificar_regiao(meta)
+
+        if chave is None:
+            anatomia, falha = self._segmentar(contexto)
+            if anatomia is not None and anatomia.parece_torax():
+                avisos.append("Região anatômica não informada; identificada como tórax pela "
+                              "segmentação anatômica.")
+                return self._analisar_torax(contexto, anatomia)
+            if cfg.usar_nuvem:
+                return self._analisar_nuvem(contexto, None, None)
+            if anatomia is None:
+                avisos.append("Região anatômica não informada; a imagem foi analisada como "
+                              "radiografia de tórax.")
+                if falha:
+                    avisos.append(falha)
+                return self._analisar_torax(contexto, None, segmentacao_falhou=bool(falha))
+            raise ExameIncompativel(
+                "Região anatômica não identificada e a imagem não parece uma radiografia de tórax. "
+                "Selecione a região manualmente ou habilite a IA em nuvem (Configurações) para "
+                "interpretar radiografias de outras regiões.",
+                acao="configurar_nuvem",
+            )
+
+        if chave == "torax":
+            return self._analisar_torax(contexto, None)
+        if cfg.usar_nuvem:
+            return self._analisar_nuvem(contexto, chave, fonte)
+
+        descricao = REGIOES[chave].nome + (f" ({meta.regiao})" if meta.regiao else "")
+        if cfg.forcar:
+            avisos.append(f"Região \"{descricao}\" analisada com o modelo de tórax por solicitação do "
+                          "usuário: resultados sem validade.")
+            return self._analisar_torax(contexto, None)
+        raise ExameIncompativel(
+            f"Região \"{descricao}\": os modelos locais interpretam apenas radiografias de tórax. "
+            "As demais regiões são interpretadas pela IA em nuvem — habilite-a em Configurações "
+            "(requer chave de API da Anthropic).",
+            acao="configurar_nuvem",
+        )
+
+    # ------------------------------------------------------------------ #
+    def _segmentar(self, c: "_Contexto") -> tuple[Anatomia | None, str | None]:
+        if not c.cfg.usar_segmentacao:
+            return None, None
+        try:
+            with self._trava:
+                probabilidades = self.modelos.segmentar(c.geo.quadrado(c.imagem, 512))
+        except Exception as exc:  # ex.: falha ao baixar os pesos
+            return None, (f"Segmentação anatômica indisponível ({exc}); lateralidade e zonas "
+                          "estimadas pela geometria da imagem.")
+        mascaras = {nome: c.geo.para_exibicao(p) > 0.5 for nome, p in probabilidades.items()}
+        return Anatomia(c.geo.forma, mascaras, invertida=c.invertida), None
+
+    def _analisar_torax(self, c: "_Contexto", anatomia: Anatomia | None,
+                        segmentacao_falhou: bool = False) -> ResultadoAnalise:
+        cfg, meta, avisos, geo = c.cfg, c.meta, c.avisos, c.geo
         if meta.incidencia == "PERFIL":
             avisos.append(
                 "Incidência em perfil: os modelos foram treinados com incidências frontais "
@@ -306,28 +396,18 @@ class AnalisadorTorax:
                 "exames de adultos; interpretar com cautela."
             )
 
-        imagem, escala = redimensionar_para_exibicao(exame.imagem, cfg.tamanho_exibicao)
-        forma = imagem.shape
-        geo = Geometria(*forma)
-        invertida = bool(meta.orientacao) and meta.orientacao[0].upper().startswith("R")
-
         with self._trava:
-            nomes, escores, mapas = self.modelos.classificar(geo.quadrado(imagem, 224),
+            nomes, escores, mapas = self.modelos.classificar(geo.quadrado(c.imagem, 224),
                                                              cfg.refinar_localizacao)
-            anatomia = Anatomia(forma, invertida=invertida)
-            if cfg.usar_segmentacao:
-                try:
-                    probabilidades = self.modelos.segmentar(geo.quadrado(imagem, 512))
-                    mascaras = {nome: geo.para_exibicao(p) > 0.5 for nome, p in probabilidades.items()}
-                    anatomia = Anatomia(forma, mascaras, invertida=invertida)
-                except Exception as exc:  # ex.: falha ao baixar os pesos
-                    avisos.append(
-                        f"Segmentação anatômica indisponível ({exc}); lateralidade e zonas "
-                        "estimadas pela geometria da imagem."
-                    )
+        if anatomia is None and not segmentacao_falhou:
+            anatomia, falha = self._segmentar(c)
+            if falha:
+                avisos.append(falha)
+        if anatomia is None:
+            anatomia = Anatomia(geo.forma, invertida=c.invertida)
 
         avisos.extend(anatomia.avisos_qualidade())
-        ict = anatomia.indice_cardiotoracico(meta.espacamento_mm, escala)
+        ict = anatomia.indice_cardiotoracico(meta.espacamento_mm, c.escala)
         if ict is not None and meta.incidencia == "AP":
             avisos.append("Incidência AP: a área cardíaca pode estar magnificada e o ICT superestimado.")
 
@@ -344,25 +424,61 @@ class AnalisadorTorax:
             if achado.relevante:
                 self._localizar(achado, mapas[i], geo, anatomia)
             achados.append(achado)
-        aplicar_supressao(achados, forma)
+        aplicar_supressao(achados, geo.forma)
         achados.sort(key=lambda a: -a.escore)
 
         descricao_modelo = self.modelos.descricao() if hasattr(self.modelos, "descricao") else {}
         if not anatomia.segmentada:
             descricao_modelo = {**descricao_modelo, "segmentacao": None}
+        return self._resultado(c, achados, descricao_modelo, ict=ict,
+                               contornos=anatomia.contornos(), regiao="torax", regiao_nome="Tórax",
+                               motor=MOTOR_LOCAL)
+
+    def _analisar_nuvem(self, c: "_Contexto", chave: str | None, fonte: str | None) -> ResultadoAnalise:
+        motor = self.motor_nuvem(c.cfg)
+        regiao_informada = REGIOES.get(chave) if chave else None
+        interpretacao = motor.interpretar(c.exame.imagem, c.meta, regiao_informada, fonte)
+
+        chave_final = chave or interpretacao.regiao
+        if chave and interpretacao.regiao != chave:
+            c.avisos.append(
+                f"A IA identificou a região como \"{REGIOES[interpretacao.regiao].nome}\", diferente "
+                f"da informada (\"{regiao_informada.nome}\")."
+            )
+        if not interpretacao.e_radiografia:
+            c.avisos.append("A IA indicou que a imagem pode não ser uma radiografia; resultados sem validade.")
+        c.avisos.append(
+            "Interpretação por IA multimodal em nuvem: a localização dos achados é aproximada e o "
+            "laudo exige revisão médica criteriosa."
+        )
+        achados = achados_da_nuvem(interpretacao, c.geo.forma)
+        lado = interpretacao.lado_exame if interpretacao.lado_exame != "nao_aplicavel" else c.meta.lateralidade
+        return self._resultado(c, achados, motor.descricao(), regiao=chave_final,
+                               regiao_nome=interpretacao.regiao_descricao or REGIOES[chave_final].nome,
+                               motor=MOTOR_NUVEM, lado=lado,
+                               interpretacao=interpretacao.model_dump())
+
+    @staticmethod
+    def _resultado(c: "_Contexto", achados, modelo, ict=None, contornos=None, regiao="torax",
+                   regiao_nome="Tórax", motor=MOTOR_LOCAL, lado=None, interpretacao=None) -> ResultadoAnalise:
         return ResultadoAnalise(
-            metadados=meta,
-            nome_arquivo=exame.nome_arquivo,
-            imagem=np.round(imagem * 255).astype(np.uint8),
-            escala=escala,
+            metadados=c.meta,
+            nome_arquivo=c.exame.nome_arquivo,
+            imagem=np.round(c.imagem * 255).astype(np.uint8),
+            escala=c.escala,
             achados=achados,
-            config=cfg,
+            config=c.cfg,
             ict=ict,
-            contornos_anatomicos=anatomia.contornos(),
-            avisos=avisos,
-            modelo=descricao_modelo,
+            contornos_anatomicos=contornos or {},
+            avisos=c.avisos,
+            modelo=modelo,
             data_analise=datetime.now().strftime("%d/%m/%Y %H:%M"),
-            tempo_s=time.perf_counter() - inicio,
+            tempo_s=time.perf_counter() - c.inicio,
+            regiao=regiao,
+            regiao_nome=regiao_nome,
+            lado_exame=lado or c.meta.lateralidade,
+            motor=motor,
+            interpretacao=interpretacao,
         )
 
     @staticmethod
@@ -383,3 +499,63 @@ class AnalisadorTorax:
         achado.regioes = regioes
         achado.local = descrever_local(regioes, definicao.tipo_local)
         achado.mapa = np.round(mapa * 255).astype(np.uint8)
+
+
+#: Nome mantido por compatibilidade com a versão 0.1.
+AnalisadorTorax = Analisador
+
+
+@dataclass
+class _Contexto:
+    exame: Exame
+    meta: object
+    cfg: Configuracao
+    imagem: np.ndarray
+    escala: float
+    geo: Geometria
+    invertida: bool
+    avisos: list[str]
+    inicio: float
+
+
+def achados_da_nuvem(interpretacao: InterpretacaoIA, forma: tuple[int, int]) -> list[Achado]:
+    """Converte os achados da IA em nuvem (caixas normalizadas 0–1000) em :class:`Achado`."""
+    altura, largura = forma
+    achados: list[Achado] = []
+    for i, item in enumerate(interpretacao.achados):
+        regioes = []
+        for caixa in item.caixas:
+            x0, x1 = sorted((caixa.x_min, caixa.x_max))
+            y0, y1 = sorted((caixa.y_min, caixa.y_max))
+            x0, x1 = (min(largura - 1, round(np.clip(v, 0, 1000) / 1000 * largura)) for v in (x0, x1))
+            y0, y1 = (min(altura - 1, round(np.clip(v, 0, 1000) / 1000 * altura)) for v in (y0, y1))
+            if x1 - x0 < 4 or y1 - y0 < 4:
+                continue
+            regioes.append(Regiao(
+                contorno=[(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+                caixa=(x0, y0, x1 - x0, y1 - y0),
+                area=(x1 - x0) * (y1 - y0),
+                pico=1.0,
+                centroide=((x0 + x1) / 2, (y0 + y1) / 2),
+                lado=item.lado if item.lado in ("direito", "esquerdo") else None,
+            ))
+        local = item.localizacao.strip()
+        if item.lado in ("direito", "esquerdo", "bilateral") and item.lado not in local.lower():
+            local = f"{local} ({item.lado})" if local else item.lado
+        gravidade = _GRAVIDADE_NUVEM.get(item.gravidade, 2)
+        achados.append(Achado(
+            chave=f"ia_{i + 1}",
+            nome=item.nome.strip() or f"Achado {i + 1}",
+            escore=None,
+            status=INDETERMINADO if item.confianca == "baixa" else POSITIVO,
+            cor="#FF1744" if gravidade == 3 else CORES_NUVEM[i % len(CORES_NUVEM)],
+            gravidade=gravidade,
+            regioes=regioes,
+            local=local,
+            confianca=item.confianca,
+            descricao=item.descricao.strip(),
+            frase_impressao=item.impressao.strip(),
+            recomendacao=item.recomendacao.strip(),
+        ))
+    achados.sort(key=lambda a: (-a.gravidade, _ORDEM_CONFIANCA.get(a.confianca, 3)))
+    return achados

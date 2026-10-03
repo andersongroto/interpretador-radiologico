@@ -75,12 +75,12 @@ def porta_livre() -> int:
 
 
 def criar_analisador():
-    from .analisador import AnalisadorTorax
+    from .analisador import Analisador
     from .config import Configuracao
     from .preferencias import carregar
 
     config = carregar().aplicar(Configuracao())
-    return AnalisadorTorax(replace(config, diretorio_pesos=pesos_embutidos()))
+    return Analisador(replace(config, diretorio_pesos=pesos_embutidos()))
 
 
 def iniciar_servidor(porta: int):
@@ -150,7 +150,7 @@ def autoteste(destino: Path) -> int:
     """Executa uma análise completa sem interface (usado para validar o executável)."""
     import numpy as np
 
-    from .analisador import AnalisadorTorax
+    from .analisador import Analisador
     from .config import Configuracao
     from .dicom_io import carregar_exame
     from .exemplo import imagem_para_dicom, imagem_sintetica
@@ -158,7 +158,7 @@ def autoteste(destino: Path) -> int:
 
     inicio = time.perf_counter()
     log.info("Autoteste: pesos em %s", pesos_embutidos())
-    analisador = AnalisadorTorax(Configuracao(diretorio_pesos=pesos_embutidos()))
+    analisador = Analisador(Configuracao(diretorio_pesos=pesos_embutidos()))
     analisador.carregar()
     exemplo = exemplo_embutido()
     if exemplo is None:
@@ -183,15 +183,49 @@ def autoteste(destino: Path) -> int:
         linhas.append("pywebview=ok")
     except Exception as exc:  # noqa: BLE001
         linhas.append(f"pywebview=indisponivel ({exc})")
-    try:
-        import anthropic
-        linhas.append(f"anthropic={anthropic.__version__}")
-    except Exception as exc:  # noqa: BLE001
-        linhas.append(f"anthropic=indisponivel ({exc})")
+    linhas.append(f"nuvem={_autoteste_nuvem()}")
     assert np.isfinite([a.escore for a in saidas.resultado.achados]).all()
     (destino / "autoteste.txt").write_text("\n".join(linhas) + "\n", encoding="utf-8")
     log.info("Autoteste concluído: %s", "; ".join(linhas))
     return 0
+
+
+def _autoteste_nuvem() -> str:
+    """Exercita o cliente da IA em nuvem com transporte simulado (sem rede nem chave real)."""
+    import json
+
+    import anthropic
+    import httpx2
+    import numpy as np
+
+    from .config import Configuracao
+    from .dicom_io import Metadados
+    from .motor_nuvem import InterpretacaoIA, MotorNuvem
+    from .regioes import REGIOES
+
+    exemplo = InterpretacaoIA(
+        e_radiografia=True, regiao="joelho", regiao_descricao="Joelho", lado_exame="nao_aplicavel",
+        incidencias="AP", qualidade_tecnica="Adequada.", achados=[], analise=[],
+        impressao=["Estudo radiográfico sem alterações significativas."], recomendacoes=[], limitacoes=[],
+    )
+    enviados = []
+
+    def tratar(requisicao):
+        enviados.append(json.loads(requisicao.content))
+        return httpx2.Response(200, json={
+            "id": "msg_autoteste", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": exemplo.model_dump_json()}],
+            "stop_reason": "end_turn", "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        })
+
+    cliente = anthropic.Anthropic(api_key="autoteste", base_url="http://autoteste.invalid", max_retries=0,
+                                  http_client=anthropic.DefaultHttpxClient(transport=httpx2.MockTransport(tratar)))
+    resultado = MotorNuvem(Configuracao(), cliente).interpretar(
+        np.zeros((64, 64), np.float32), Metadados(), REGIOES["joelho"])
+    assert resultado.impressao == exemplo.impressao
+    assert enviados[0]["output_config"]["format"]["type"] == "json_schema"
+    return f"ok (anthropic {anthropic.__version__})"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,7 +252,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001
         detalhe = traceback.format_exc()
         log.error("Falha fatal:\n%s", detalhe)
-        _mostrar_erro(f"Ocorreu um erro ao iniciar o programa.\n\nDetalhes em:\n{registro}")
+        if not args.autoteste:  # sem diálogos no modo não interativo
+            _mostrar_erro(f"Ocorreu um erro ao iniciar o programa.\n\nDetalhes em:\n{registro}")
         return 1
 
 

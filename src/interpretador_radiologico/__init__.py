@@ -1,8 +1,9 @@
 """Interpretador Radiológico.
 
-Sistema de apoio à decisão para interpretação de radiografias de tórax em
-DICOM: classifica achados com redes neurais pré-treinadas, localiza as regiões
-suspeitas na imagem e redige um laudo estruturado em português.
+Sistema de apoio à decisão para interpretação de radiografias em DICOM. O tórax
+é analisado por redes neurais locais (classificação, localização e segmentação);
+as demais regiões, por uma IA multimodal em nuvem opcional. Os achados são
+marcados na imagem e um laudo estruturado é redigido em português.
 
 AVISO: ferramenta de pesquisa/apoio. Não é um dispositivo médico certificado e
 não substitui a avaliação de um(a) médico(a) radiologista.

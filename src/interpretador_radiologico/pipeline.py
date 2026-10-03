@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .analisador import AnalisadorTorax
+from .analisador import Analisador
 from .config import Configuracao
 from .dicom_io import Exame
 from .exportacao_dicom import captura_secundaria, dicom_bytes, pdf_encapsulado
@@ -56,7 +56,7 @@ class Saidas:
                                            self.resultado.config.anonimizar))
 
 
-def processar(exame: Exame, analisador: AnalisadorTorax,
+def processar(exame: Exame, analisador: Analisador,
               opcoes: OpcoesVisualizacao | None = None,
               config: Configuracao | None = None) -> Saidas:
     resultado = analisador.analisar(exame, config)

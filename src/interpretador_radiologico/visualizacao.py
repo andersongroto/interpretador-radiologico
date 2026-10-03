@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .patologias import cor_bgr
-from .resultado import POSITIVO, Achado, ResultadoAnalise
+from .resultado import MOTOR_NUVEM, POSITIVO, Achado, ResultadoAnalise
 
 COR_ICT_CORACAO = "#EC407A"
 COR_ICT_TORAX = "#4DD0E1"
@@ -142,7 +142,7 @@ def _desenhar_rotulos(imagem: Image.Image, resultado: ResultadoAnalise, achados:
     ocupados: list[tuple[int, int, int, int]] = []
     for numero, achado in enumerate(achados, start=1):
         for regiao in achado.regioes[:1]:
-            texto = f"{numero}  {achado.nome} {achado.escore:.0%}"
+            texto = f"{numero}  {achado.nome} {achado.rotulo_confianca}".strip()
             x0, y0, x1, y1 = draw.textbbox((0, 0), texto, font=f)
             w, h = x1 - x0 + 10, y1 - y0 + 8
             x, y, _, _ = regiao.caixa
@@ -180,15 +180,17 @@ def _adicionar_legenda(imagem: Image.Image, resultado: ResultadoAnalise, achados
             draw.text((margem + recuo, y), linha, font=f, fill=cor)
             y += f.size + round(5 * escala)
 
+    nuvem = resultado.motor == MOTOR_NUVEM
     escrever("Achados (IA)", f_titulo)
+    escrever(resultado.regiao_nome, f_menor, (170, 176, 186))
     y += round(6 * escala)
     if not achados:
         escrever("Nenhum achado acima dos limiares de detecção.", f_texto, (160, 200, 160))
     for numero, achado in enumerate(achados, start=1):
         quadrado = round(16 * escala)
         draw.rectangle((margem, y + 2, margem + quadrado, y + 2 + quadrado), fill=_hex_rgb(achado.cor))
-        estado = "" if achado.status == POSITIVO else " (indeterminado)"
-        escrever(f"{numero}. {achado.nome} — {achado.escore:.0%}{estado}", f_texto, recuo=quadrado + 8)
+        estado = "" if achado.status == POSITIVO or achado.escore is None else " (indeterminado)"
+        escrever(f"{numero}. {achado.nome} — {achado.rotulo_confianca}{estado}", f_texto, recuo=quadrado + 8)
         if achado.local:
             escrever(achado.local[0].upper() + achado.local[1:], f_menor, (170, 176, 186), recuo=quadrado + 8)
         y += round(4 * escala)
@@ -197,6 +199,8 @@ def _adicionar_legenda(imagem: Image.Image, resultado: ResultadoAnalise, achados
         escrever(f"Índice cardiotorácico: {resultado.ict.indice:.2f}".replace(".", ","), f_texto,
                  _hex_rgb(COR_ICT_CORACAO))
     rodape = "Apoio à decisão — requer revisão por médico(a) radiologista."
+    if nuvem:
+        rodape = "IA em nuvem: localização aproximada. " + rodape
     linhas = _quebrar(draw, rodape, f_menor, largura_painel - 2 * margem)
     y_rodape = imagem.height - margem - len(linhas) * (f_menor.size + 4)
     for linha in linhas:

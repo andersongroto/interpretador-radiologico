@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from interpretador_radiologico.analisador import AnalisadorTorax
+from interpretador_radiologico.analisador import Analisador
 from interpretador_radiologico.config import Configuracao
 from interpretador_radiologico.exemplo import imagem_para_dicom
 from interpretador_radiologico.patologias import CATALOGO
@@ -42,11 +42,12 @@ class ModelosFalsos:
 
     def __init__(self, escores: dict[str, float] | None = None,
                  focos: dict[str, tuple[float, float]] | None = None,
-                 segmentacao: bool = True, coracao=CORACAO):
+                 segmentacao: bool = True, coracao=CORACAO, pulmoes: bool = True):
         self.escores = escores or {}
         self.focos = focos or {}
         self.segmentacao = segmentacao
         self.coracao = coracao
+        self.pulmoes = pulmoes  # False simula imagem sem campos pulmonares (não-tórax)
         self.chamadas = 0
 
     def classificar(self, entrada, refinar):
@@ -68,9 +69,10 @@ class ModelosFalsos:
         assert entrada.shape == (512, 512)
         coluna = np.zeros((512, 512), dtype=np.float32)
         coluna[:, 246:266] = 1
+        vazio = np.zeros((512, 512), dtype=np.float32)
         return {
-            "pulmao_direito": _elipse(512, *PULMAO_IMAGEM_ESQUERDA),
-            "pulmao_esquerdo": _elipse(512, *PULMAO_IMAGEM_DIREITA),
+            "pulmao_direito": _elipse(512, *PULMAO_IMAGEM_ESQUERDA) if self.pulmoes else vazio,
+            "pulmao_esquerdo": _elipse(512, *PULMAO_IMAGEM_DIREITA) if self.pulmoes else vazio,
             "coracao": _elipse(512, *self.coracao),
             "coluna": coluna,
         }
@@ -93,6 +95,55 @@ def caminho_dicom(tmp_path):
 @pytest.fixture
 def analisador_falso():
     """Fábrica de analisadores com modelos falsos."""
-    def fabricar(escores=None, focos=None, segmentacao=True, **config):
-        return AnalisadorTorax(Configuracao(**config), ModelosFalsos(escores, focos, segmentacao))
+    def fabricar(escores=None, focos=None, segmentacao=True, motor_nuvem=None, pulmoes=True, **config):
+        modelos = ModelosFalsos(escores, focos, segmentacao, pulmoes=pulmoes)
+        return Analisador(Configuracao(**config), modelos, motor_nuvem=motor_nuvem)
     return fabricar
+
+
+def interpretacao_falsa(regiao="joelho", achados=True):
+    """Resposta estruturada típica da IA em nuvem."""
+    from interpretador_radiologico.motor_nuvem import AchadoIA, CaixaIA, InterpretacaoIA, SecaoIA
+
+    lista = []
+    if achados:
+        lista = [
+            AchadoIA(nome="Fratura da tíbia proximal", descricao="Traço de fratura no planalto tibial lateral.",
+                     impressao="Fratura do planalto tibial lateral.", localizacao="planalto tibial lateral",
+                     lado="direito", confianca="alta", gravidade="urgente",
+                     caixas=[CaixaIA(x_min=200, y_min=500, x_max=400, y_max=650)],
+                     recomendacao="Considerar tomografia para planejamento cirúrgico."),
+            AchadoIA(nome="Derrame articular", descricao="Possível distensão do recesso suprapatelar.",
+                     impressao="Possível derrame articular.", localizacao="recesso suprapatelar",
+                     lado="direito", confianca="baixa", gravidade="leve", caixas=[], recomendacao=""),
+        ]
+    return InterpretacaoIA(
+        e_radiografia=True, regiao=regiao, regiao_descricao="Joelho direito", lado_exame="direito",
+        incidencias="AP e perfil", qualidade_tecnica="Exame tecnicamente adequado.",
+        achados=lista,
+        analise=[SecaoIA(titulo="Estruturas ósseas", texto="Traço de fratura no planalto tibial lateral."),
+                 SecaoIA(titulo="Partes moles", texto="Possível derrame articular.")],
+        impressao=["Fratura do planalto tibial lateral direito."] if achados else
+                  ["Estudo radiográfico sem alterações significativas."],
+        recomendacoes=["Correlação clínica."],
+        limitacoes=["Avaliação limitada da patela no perfil."],
+    )
+
+
+class MotorNuvemFalso:
+    """Substitui o MotorNuvem, registrando as chamadas."""
+
+    def __init__(self, interpretacao=None, erro=None):
+        self.interpretacao = interpretacao or interpretacao_falsa()
+        self.erro = erro
+        self.chamadas = []
+
+    def interpretar(self, imagem, meta, regiao, fonte_regiao=None, indicacao=None):
+        self.chamadas.append({"regiao": regiao.chave if regiao else None, "fonte": fonte_regiao,
+                              "meta": meta, "forma": imagem.shape})
+        if self.erro:
+            raise self.erro
+        return self.interpretacao
+
+    def descricao(self):
+        return {"classificador": "IA em nuvem falsa", "segmentacao": None}

@@ -8,9 +8,10 @@ from datetime import datetime
 
 from . import AVISO_LEGAL, __version__
 from .patologias import FRASES_NORMAIS, LOCAL_NENHUM, SISTEMAS, patologia
-from .resultado import INDETERMINADO, NEGATIVO, POSITIVO, Achado, ResultadoAnalise
+from .regioes import REGIOES
+from .resultado import (INDETERMINADO, MOTOR_LOCAL, MOTOR_NUVEM, NEGATIVO, POSITIVO, Achado,
+                        ResultadoAnalise)
 
-TITULO = "LAUDO DE RADIOGRAFIA DE TÓRAX"
 STATUS_ROTULO = {POSITIVO: "Positivo", INDETERMINADO: "Indeterminado", NEGATIVO: "Negativo"}
 _INCIDENCIA_TEXTO = {
     "PA": "póstero-anterior (PA)",
@@ -38,6 +39,7 @@ class Laudo:
     aviso_legal: str = AVISO_LEGAL
     revisor: str | None = None  # "Nome — CRM", quando revisado no visualizador
     editado: bool = False
+    motor: str = MOTOR_LOCAL
 
     # ------------------------------------------------------------------ #
     def texto(self) -> str:
@@ -257,13 +259,15 @@ def _recomendacoes(resultado: ResultadoAnalise) -> list[str]:
 
 
 def _escores(resultado: ResultadoAnalise) -> list[dict]:
+    nuvem = resultado.motor == MOTOR_NUVEM
     return [
         {
             "chave": a.chave,
             "nome": a.nome,
-            "escore": round(a.escore, 4),
+            "escore": None if a.escore is None else round(a.escore, 4),
+            "confianca": a.confianca,
             "status": STATUS_ROTULO.get(a.status, a.status),
-            "local": a.local if patologia(a.chave).tipo_local != LOCAL_NENHUM else "",
+            "local": a.local if nuvem or patologia(a.chave).tipo_local != LOCAL_NENHUM else "",
             "suprimido": a.suprimido,
         }
         for a in resultado.achados
@@ -285,12 +289,69 @@ def _informacoes_modelo(resultado: ResultadoAnalise) -> str:
     return "; ".join(partes) + "."
 
 
+def _instituicao(resultado: ResultadoAnalise) -> str:
+    return resultado.config.nome_instituicao or resultado.metadados.instituicao or "Serviço de Radiologia"
+
+
+def _titulo(resultado: ResultadoAnalise) -> str:
+    regiao = REGIOES.get(resultado.regiao)
+    if regiao is None:
+        return "LAUDO DE RADIOGRAFIA"
+    return f"LAUDO DE {regiao.titulo_com_lado(resultado.lado_exame)}"
+
+
+def _laudo_nuvem(resultado: ResultadoAnalise) -> Laudo:
+    """Laudo montado a partir da interpretação estruturada da IA em nuvem."""
+    ia = resultado.interpretacao or {}
+    exame = "Mamografia" if resultado.regiao == "mama" else f"Radiografia de {resultado.regiao_nome.lower()}"
+    tecnica = [f"{exame}; incidência(s): {ia.get('incidencias') or 'não informada(s)'}."]
+    if ia.get("qualidade_tecnica"):
+        tecnica.append(ia["qualidade_tecnica"].rstrip(".") + ".")
+    tecnica.append(f"Interpretação por IA multimodal em nuvem ({resultado.config.modelo_nuvem}); "
+                   "localização dos achados aproximada.")
+
+    analise = [(secao["titulo"], [secao["texto"]]) for secao in ia.get("analise", []) if secao.get("texto")]
+    indeterminados = [
+        f"{a.nome}{f' — {a.local}' if a.local else ''}: {a.descricao}".rstrip() for a in resultado.indeterminados
+    ]
+    impressao = [t for t in ia.get("impressao", []) if t.strip()]
+    if not impressao:
+        impressao = [a.frase_impressao or a.nome for a in resultado.positivos] or [
+            "Estudo radiográfico sem alterações significativas."]
+    recomendacoes: list[str] = []
+    for texto in list(ia.get("recomendacoes", [])) + [a.recomendacao for a in resultado.achados]:
+        if texto and texto.strip() and texto.strip() not in recomendacoes:
+            recomendacoes.append(texto.strip())
+    observacoes = list(resultado.avisos) + [t for t in ia.get("limitacoes", []) if t.strip()]
+
+    modelo = resultado.modelo.get("classificador") or resultado.config.modelo_nuvem
+    informacoes = (f"Interpretador Radiológico {__version__}; {modelo}; análise em "
+                   f"{resultado.data_analise} ({_decimal(resultado.tempo_s, 1)} s).")
+    return Laudo(
+        titulo=_titulo(resultado),
+        instituicao=_instituicao(resultado),
+        cabecalho=_cabecalho(resultado),
+        tecnica=" ".join(tecnica),
+        analise=analise,
+        achados_indeterminados=indeterminados,
+        medidas=[],
+        impressao=impressao,
+        recomendacoes=recomendacoes,
+        observacoes=observacoes,
+        escores=_escores(resultado),
+        informacoes_modelo=informacoes,
+        data_emissao=datetime.now().strftime("%d/%m/%Y %H:%M"),
+        motor=MOTOR_NUVEM,
+    )
+
+
 def gerar_laudo(resultado: ResultadoAnalise) -> Laudo:
     """Monta o laudo estruturado a partir do resultado da análise."""
-    instituicao = (resultado.config.nome_instituicao or resultado.metadados.instituicao
-                   or "Serviço de Radiologia")
+    if resultado.motor == MOTOR_NUVEM:
+        return _laudo_nuvem(resultado)
+    instituicao = _instituicao(resultado)
     return Laudo(
-        titulo=TITULO,
+        titulo=_titulo(resultado),
         instituicao=instituicao,
         cabecalho=_cabecalho(resultado),
         tecnica=_tecnica(resultado),

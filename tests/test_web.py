@@ -56,7 +56,8 @@ def test_analisar_e_baixar(cliente, caminho_dicom):
 
 def test_erros(cliente, caminho_dicom, tmp_path):
     joelho = _enviar(cliente, caminho_dicom("joelho.dcm", regiao="KNEE"))
-    assert joelho.status_code == 422 and "KNEE" in joelho.json()["detail"]
+    assert joelho.status_code == 422 and "KNEE" in joelho.json()["detail"]["mensagem"]
+    assert joelho.json()["detail"]["acao"] == "configurar_nuvem"
     assert _enviar(cliente, caminho_dicom("joelho.dcm", regiao="KNEE"), forcar=True).status_code == 200
 
     lixo = tmp_path / "lixo.dcm"
@@ -71,3 +72,59 @@ def test_anonimizar_e_limite_de_resultados(cliente, caminho_dicom):
     assert cliente.get(f"/api/resultados/{ids[0]}/anotada.png").status_code == 404  # descartado (LRU)
     dados = cliente.get(f"/api/resultados/{ids[-1]}/resultado.json").json()
     assert dados["resultado"]["metadados"]["paciente_nome"] == "ANÔNIMO"
+
+
+def test_status_lista_regioes(cliente):
+    status = cliente.get("/api/status").json()
+    assert {"chave": "joelho", "nome": "Joelho"} in status["regioes"]
+    assert status["configuravel"] is False and status["exemplo"] is False
+    assert cliente.get("/api/configuracoes").status_code == 404
+    assert cliente.post("/api/exemplo").status_code == 404
+
+
+def test_configuracoes_e_exemplo(tmp_path, analisador_falso, caminho_dicom, monkeypatch):
+    from interpretador_radiologico.preferencias import carregar
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    analisador = analisador_falso()
+    caminho = tmp_path / "prefs.json"
+    app = TestClient(criar_app(analisador, exemplo=caminho_dicom(), preferencias_caminho=caminho))
+    inicial = app.get("/api/configuracoes").json()
+    assert inicial["usar_nuvem"] is False and inicial["chave_configurada"] is False
+    assert "chave_api" not in inicial
+
+    resposta = app.put("/api/configuracoes", json={"usar_nuvem": True, "chave_api": "sk-ant-teste-1234",
+                                                    "nome_instituicao": "Clínica Y", "limiar_positivo": 0.7})
+    dados = resposta.json()
+    assert dados["chave_configurada"] and dados["chave_final"] == "1234" and "sk-ant" not in resposta.text
+    assert analisador.config.usar_nuvem and analisador.config.chave_api == "sk-ant-teste-1234"
+    assert analisador.config.limiar_positivo == 0.7
+    assert carregar(caminho).nome_instituicao == "Clínica Y"
+    # Chave vazia mantém a atual; remover_chave apaga.
+    app.put("/api/configuracoes", json={"chave_api": ""})
+    assert carregar(caminho).chave_api == "sk-ant-teste-1234"
+    app.put("/api/configuracoes", json={"remover_chave": True})
+    assert carregar(caminho).chave_api == ""
+    assert app.put("/api/configuracoes", json={"limiar_positivo": 0.3}).status_code == 400
+
+    exemplo = app.post("/api/exemplo")
+    assert exemplo.status_code == 200 and exemplo.json()["arquivo"] == "torax.dcm"
+    assert app.get("/api/status").json()["exemplo"] is True
+
+
+def test_regiao_e_erro_da_nuvem(analisador_falso, caminho_dicom):
+    from interpretador_radiologico.motor_nuvem import ErroNuvem
+
+    from .conftest import MotorNuvemFalso
+
+    motor = MotorNuvemFalso()
+    cliente = TestClient(criar_app(analisador_falso(usar_nuvem=True, motor_nuvem=motor)))
+    dados = _enviar(cliente, caminho_dicom(), regiao="joelho").json()  # DICOM de tórax, região forçada
+    assert dados["motor"] == "nuvem" and dados["regiao"] == "joelho"
+    assert dados["laudo"]["titulo"] == "LAUDO DE RADIOGRAFIA DO JOELHO DIREITO"
+    assert dados["achados"][0]["rotulo_confianca"] == "confiança alta" and dados["achados"][0]["mapa"] is None
+    assert _enviar(cliente, caminho_dicom(), regiao="inexistente").status_code == 400
+
+    motor.erro = ErroNuvem("Sem conexão com a API da Anthropic.")
+    erro = _enviar(cliente, caminho_dicom(regiao="HAND"))
+    assert erro.status_code == 502 and "Sem conexão" in erro.json()["detail"]["mensagem"]

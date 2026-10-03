@@ -13,13 +13,20 @@
     <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 5v10M16 15c-2 0-3 1-5 2-2 2-3.5 6-3.5 8.5 0 2 2 2.2 4 1.2 2.2-1.1 4.5-3.5 4.5-6.7zM16 15c2 0 3 1 5 2 2 2 3.5 6 3.5 8.5 0 2-2 2.2-4 1.2-2.2-1.1-4.5-3.5-4.5-6.7z"/></svg>
     <div>
       <h1>Interpretador Radiológico</h1>
-      <p>Radiografia de tórax · apoio à decisão por IA</p>
+      <p>Radiografias · apoio à decisão por IA</p>
     </div>
   </div>
   <div class="acoes-topo">
+    <label class="opcao seletor" title="Região anatômica do exame (automática: pelo DICOM)">
+      Região
+      <select id="opt-regiao"><option value="">Automática</option></select>
+    </label>
     <label class="opcao" title="Remove nome, ID, data de nascimento e nº de acesso das saídas">
       <input type="checkbox" id="opt-anonimizar"> Anonimizar
     </label>
+    <button class="botao icone" id="btn-config" type="button" title="Configurações" aria-label="Configurações" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
     <button class="botao primario" id="btn-abrir" type="button">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
       Abrir exame
@@ -54,8 +61,9 @@
       <button class="soltar" id="soltar" type="button">
         <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="6" width="32" height="36" rx="4"/><path d="M24 30V16m0 0-6 6m6-6 6 6"/></svg>
         <strong>Arraste um arquivo DICOM aqui</strong>
-        <span>ou clique para selecionar · radiografias de tórax PA/AP (.dcm)<br>PNG/JPEG também são aceitos para demonstração</span>
+        <span>ou clique para selecionar · radiografias (.dcm) de qualquer região<br>tórax: modelos locais · demais regiões: IA em nuvem (Configurações)</span>
       </button>
+      <button class="botao exemplo" id="btn-exemplo" type="button" hidden>Abrir exame de exemplo</button>
       <div class="carregando" id="carregando" hidden>
         <div class="giro"></div>
         <p>Analisando radiografia…</p>
@@ -65,6 +73,7 @@
     <div class="erro" id="erro" role="alert" hidden>
       <span id="erro-texto"></span>
       <button class="botao pequeno" id="btn-forcar" type="button" hidden>Analisar mesmo assim</button>
+      <button class="botao pequeno" id="btn-erro-config" type="button" hidden>Abrir configurações</button>
       <button class="fechar" id="btn-fechar-erro" type="button" aria-label="Fechar">×</button>
     </div>
   </section>
@@ -80,17 +89,18 @@
     <div class="conteudo" id="vazio">
       <div class="vazio">
         <h2>Nenhum exame carregado</h2>
-        <p>Abra uma radiografia de tórax em DICOM para obter:</p>
+        <p>Abra uma radiografia em DICOM para obter:</p>
         <ul>
-          <li>Classificação de 18 achados radiológicos</li>
+          <li>Tórax: classificação de 18 achados por modelos locais, mapas de calor e índice cardiotorácico</li>
+          <li>Demais regiões (membros, coluna, crânio, bacia, abdome, mamografia, odontologia): interpretação por IA em nuvem, quando habilitada em Configurações</li>
           <li>Marcação das regiões suspeitas na imagem</li>
-          <li>Índice cardiotorácico estimado</li>
           <li>Pré-laudo estruturado editável (PDF, texto e DICOM)</li>
         </ul>
       </div>
     </div>
 
     <div class="conteudo" id="aba-achados" role="tabpanel" hidden>
+      <div class="motor" id="motor"></div>
       <div class="impressao" id="impressao"></div>
       <div id="avisos-resumo"></div>
       <h3 class="subtitulo">Achados detectados</h3>
@@ -103,6 +113,7 @@
 
     <div class="conteudo" id="aba-laudo" role="tabpanel" hidden>
       <div class="selo" id="selo-laudo">Pré-laudo gerado por IA — revise e edite antes de emitir</div>
+      <h2 class="titulo-laudo" id="titulo-laudo"></h2>
       <dl class="cabecalho-laudo" id="cabecalho-laudo"></dl>
       <form class="edicao" id="form-laudo" autocomplete="off">
         <label>Técnica <textarea id="ed-tecnica" rows="3" readonly></textarea></label>
@@ -128,8 +139,7 @@
     </div>
 
     <div class="conteudo" id="aba-escores" role="tabpanel" hidden>
-      <p class="nota">Escores do classificador normalizados pelo ponto de operação de cada patologia
-        (50% = limiar ótimo do treinamento). Linhas verticais: limiares de <b>indeterminado</b> e <b>positivo</b>.</p>
+      <p class="nota" id="nota-escores"></p>
       <div id="lista-escores"></div>
     </div>
 
@@ -143,6 +153,48 @@
     </div>
   </aside>
 </main>
+
+<dialog class="dialogo" id="dlg-config" aria-labelledby="cfg-titulo">
+  <form id="form-config" autocomplete="off">
+    <h2 id="cfg-titulo">Configurações</h2>
+    <fieldset>
+      <legend>IA em nuvem — radiografias além do tórax</legend>
+      <label class="linha"><input type="checkbox" id="cfg-nuvem"> Interpretar membros, coluna, crânio, face, bacia, abdome, mamografia e radiografias odontológicas com IA em nuvem</label>
+      <p class="nota">Usa o modelo Claude, da Anthropic, pela internet, com cobrança por uso na sua conta da Anthropic.
+        São enviados apenas os pixels da imagem e dados não identificáveis (região, incidência, lado, sexo e idade).
+        Atenção: textos gravados na própria imagem (ex.: nome do paciente) seguem junto com os pixels.
+        Radiografias de tórax continuam sendo analisadas localmente.</p>
+      <label>Chave de API da Anthropic
+        <input type="password" id="cfg-chave" placeholder="sk-ant-...">
+      </label>
+      <small class="nota" id="cfg-chave-status"></small>
+      <label class="linha"><input type="checkbox" id="cfg-remover-chave"> Remover a chave salva</label>
+      <label>Modelo
+        <select id="cfg-modelo">
+          <option value="claude-opus-5-5">Claude Opus 5.5 (recomendado)</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (mais rápido e econômico)</option>
+        </select>
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>Laudo</legend>
+      <label>Nome do serviço no cabeçalho <input id="cfg-instituicao" placeholder="Usa o nome do DICOM se vazio"></label>
+      <label class="linha"><input type="checkbox" id="cfg-anonimizar"> Anonimizar por padrão</label>
+    </fieldset>
+    <fieldset>
+      <legend>Tórax — modelos locais</legend>
+      <div class="dupla">
+        <label>Limiar positivo (%) <input type="number" id="cfg-lim-pos" min="1" max="99" step="1"></label>
+        <label>Limiar baixa confiança (%) <input type="number" id="cfg-lim-ind" min="1" max="99" step="1"></label>
+      </div>
+    </fieldset>
+    <p class="erro-form" id="cfg-erro" role="alert" hidden></p>
+    <div class="botoes">
+      <button class="botao primario" id="cfg-salvar" type="submit">Salvar</button>
+      <button class="botao fantasma" id="cfg-cancelar" type="button">Cancelar</button>
+    </div>
+  </form>
+</dialog>
 
 <footer class="rodape" id="rodape">
   Ferramenta de apoio à decisão. Não é dispositivo médico certificado e não substitui a avaliação de médico(a) radiologista.

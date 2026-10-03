@@ -6,7 +6,7 @@ radiografia pública na primeira execução).
 
 import pytest
 
-from interpretador_radiologico.analisador import AnalisadorTorax
+from interpretador_radiologico.analisador import Analisador
 from interpretador_radiologico.dicom_io import carregar_exame
 from interpretador_radiologico.laudo import gerar_laudo
 
@@ -25,7 +25,7 @@ def exemplo(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def analisador():
-    a = AnalisadorTorax()
+    a = Analisador()
     try:
         a.carregar()
     except Exception as exc:  # noqa: BLE001 - sem rede para baixar os pesos

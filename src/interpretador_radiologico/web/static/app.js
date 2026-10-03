@@ -13,6 +13,7 @@ const estado = {
   opacidade: 0.55, brilho: 1, contraste: 1, inverter: false,
   zoom: 1, panX: 0, panY: 0,
   arquivo: null,
+  status: null,         // resposta de /api/status
 };
 
 const $ = (id) => document.getElementById(id);
@@ -22,6 +23,9 @@ const area = $("area");
 
 const STATUS = { positivo: "Positivo", indeterminado: "Indeterminado", negativo: "Negativo" };
 const pct = (v) => `${Math.round(v * 100)}%`;
+// Escore do classificador local ou confiança qualitativa da IA em nuvem.
+const textoEscore = (a) => (a.escore !== null && a.escore !== undefined ? pct(a.escore) : a.rotulo_confianca || "");
+const nuvem = () => estado.dados && estado.dados.motor === "nuvem";
 const capitalizar = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
 
 function el(tag, attrs = {}, ...filhos) {
@@ -51,36 +55,54 @@ function carregarImagem(src) {
 // ------------------------------------------------------------------------ //
 // Envio do arquivo
 // ------------------------------------------------------------------------ //
-async function analisar(arquivo, forcar = false) {
-  estado.arquivo = arquivo;
+async function enviar(url, form) {
   esconderErro();
   $("carregando").hidden = false;
   $("soltar").hidden = true;
-  const form = new FormData();
-  form.append("arquivo", arquivo, arquivo.name);
-  form.append("forcar", forcar ? "true" : "false");
-  form.append("anonimizar", $("opt-anonimizar").checked ? "true" : "false");
+  $("btn-exemplo").hidden = true;
   try {
-    const resp = await fetch("/api/analisar", { method: "POST", body: form });
+    const resp = await fetch(url, { method: "POST", body: form });
     const corpo = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      const mensagem = corpo.detail || `Falha na análise (HTTP ${resp.status}).`;
-      mostrarErro(mensagem, resp.status === 422);
-      if (!estado.dados) $("soltar").hidden = false;
+      const detalhe = corpo.detail || {};
+      const mensagem = typeof detalhe === "string" ? detalhe
+        : detalhe.mensagem || `Falha na análise (HTTP ${resp.status}).`;
+      mostrarErro(mensagem, typeof detalhe === "object" ? detalhe.acao : null);
       return;
     }
     await exibirResultado(corpo);
   } catch (e) {
     mostrarErro(`Não foi possível contatar o servidor: ${e.message}`);
-    if (!estado.dados) $("soltar").hidden = false;
   } finally {
     $("carregando").hidden = true;
+    if (!estado.dados) {
+      $("soltar").hidden = false;
+      $("btn-exemplo").hidden = !(estado.status && estado.status.exemplo);
+    }
   }
 }
 
-function mostrarErro(texto, permitirForcar = false) {
+function analisar(arquivo, forcar = false) {
+  estado.arquivo = arquivo;
+  const form = new FormData();
+  form.append("arquivo", arquivo, arquivo.name);
+  form.append("forcar", forcar ? "true" : "false");
+  form.append("anonimizar", $("opt-anonimizar").checked ? "true" : "false");
+  form.append("regiao", $("opt-regiao").value);
+  return enviar("/api/analisar", form);
+}
+
+function analisarExemplo() {
+  estado.arquivo = null;
+  const form = new FormData();
+  form.append("anonimizar", $("opt-anonimizar").checked ? "true" : "false");
+  return enviar("/api/exemplo", form);
+}
+
+function mostrarErro(texto, acao = null) {
   $("erro-texto").textContent = texto;
-  $("btn-forcar").hidden = !permitirForcar;
+  $("btn-forcar").hidden = !(acao === "forcar" && estado.arquivo);
+  $("btn-erro-config").hidden = !(acao === "configurar_nuvem" && estado.status && estado.status.configuravel);
   $("erro").hidden = false;
 }
 function esconderErro() { $("erro").hidden = true; }
@@ -111,11 +133,17 @@ function achadosRelevantes() {
   const ordem = { positivo: 0, indeterminado: 1 };
   return estado.dados.achados
     .filter((a) => a.status !== "negativo")
-    .sort((a, b) => (a.suprimido - b.suprimido) || (ordem[a.status] - ordem[b.status]) || (b.escore - a.escore));
+    .sort((a, b) => (a.suprimido - b.suprimido) || (ordem[a.status] - ordem[b.status])
+      || ((b.escore ?? 0) - (a.escore ?? 0)));
 }
 
 function preencherAchados() {
   const { laudo, avisos } = estado.dados;
+  $("motor").replaceChildren(
+    el("b", {}, estado.dados.regiao_nome),
+    nuvem() ? el("span", { class: "etiqueta nuvem", title: estado.dados.modelo.classificador || "" }, "IA em nuvem")
+      : el("span", { class: "etiqueta local" }, "Modelos locais"),
+  );
   const urgente = estado.dados.achados.some((a) => a.status === "positivo" && a.gravidade >= 3);
   const caixa = $("impressao");
   caixa.className = "impressao" + (urgente ? " urgente" : "");
@@ -129,7 +157,8 @@ function preencherAchados() {
   const relevantes = achadosRelevantes();
   lista.replaceChildren();
   if (!relevantes.length) {
-    lista.append(el("p", { class: "nota" }, "Nenhum achado acima dos limiares de detecção."));
+    lista.append(el("p", { class: "nota" }, nuvem() ? "A IA não apontou alterações."
+      : "Nenhum achado acima dos limiares de detecção."));
   }
   relevantes.forEach((a) => {
     const marcado = estado.visiveis.has(a.chave);
@@ -147,10 +176,11 @@ function preencherAchados() {
         el("span", { class: `etiqueta ${a.status}` }, STATUS[a.status]),
         a.suprimido ? el("span", { class: "etiqueta redundante", title: "Incluído em achado mais específico" }, "redundante") : null),
       el("div", { style: "display:flex;gap:8px;align-items:center" },
-        el("span", { class: "escore-num" }, pct(a.escore)),
+        el("span", { class: "escore-num" }, textoEscore(a)),
         el("label", {}, caixaSel)),
-      el("div", { class: "barra" }, el("i", { style: `width:${pct(a.escore)};background:${a.cor}` })),
+      a.escore !== null ? el("div", { class: "barra" }, el("i", { style: `width:${pct(a.escore)};background:${a.cor}` })) : null,
       a.local ? el("div", { class: "local" }, capitalizar(a.local)) : null,
+      a.descricao ? el("div", { class: "descricao" }, a.descricao) : null,
     );
     cartao.addEventListener("mouseenter", () => { estado.destaque = a.chave; desenhar(); });
     cartao.addEventListener("mouseleave", () => { estado.destaque = null; desenhar(); });
@@ -159,6 +189,7 @@ function preencherAchados() {
   });
 
   const negativos = estado.dados.achados.filter((a) => a.status === "negativo");
+  document.querySelector(".negativos").hidden = !negativos.length;
   $("n-negativos").textContent = negativos.length;
   $("lista-negativos").replaceChildren(...negativos.map((a) =>
     el("div", { class: "linha-negativa" }, el("span", {}, a.nome), el("span", { class: "escore-num" }, pct(a.escore)))));
@@ -186,6 +217,7 @@ function focarAchado(chave) {
 // Laudo
 // ------------------------------------------------------------------------ //
 function preencherLaudo(laudo) {
+  $("titulo-laudo").textContent = laudo.titulo;
   $("cabecalho-laudo").replaceChildren(...laudo.cabecalho.flatMap(([r, v]) => [el("dt", {}, r), el("dd", {}, v)]));
   $("ed-tecnica").value = laudo.tecnica;
   $("ed-analise").value = laudo.analise.map((s) => `${s.sistema}: ${s.frases.join(" ")}`).join("\n");
@@ -256,6 +288,17 @@ async function copiarTexto() {
 // ------------------------------------------------------------------------ //
 function preencherEscores() {
   const { achados, limiares } = estado.dados;
+  if (nuvem()) {
+    $("nota-escores").textContent = "A IA em nuvem não produz escores numéricos: cada achado traz uma confiança "
+      + "qualitativa (alta, moderada ou baixa). Achados de baixa confiança aparecem tracejados na imagem.";
+    $("lista-escores").replaceChildren(...(achados.length ? achados.map((a) => el("div", { class: "linha-ia" },
+      el("span", {}, a.nome), el("span", { class: `etiqueta ${a.status}` }, a.rotulo_confianca)))
+      : [el("p", { class: "nota" }, "Nenhum achado apontado.")]));
+    return;
+  }
+  $("nota-escores").replaceChildren("Escores do classificador normalizados pelo ponto de operação de cada patologia "
+    + "(50% = limiar ótimo do treinamento). Linhas verticais: limiares de ", el("b", {}, "indeterminado"), " e ",
+    el("b", {}, "positivo"), ".");
   $("lista-escores").replaceChildren(...[...achados].sort((a, b) => b.escore - a.escore).map((a) => {
     const cor = a.status === "negativo" ? "#4b5869" : a.cor;
     return el("div", { class: "linha-escore", title: `${a.nome}: ${STATUS[a.status]}` },
@@ -271,9 +314,11 @@ function preencherEscores() {
 function preencherExame() {
   const m = estado.dados.metadados;
   const campos = [
+    ["Região analisada", estado.dados.regiao_nome],
     ["Paciente", m.paciente_nome], ["ID", m.paciente_id], ["Sexo", m.sexo], ["Idade", m.idade],
     ["Data", [m.data_exame, m.hora_exame].filter(Boolean).join(" ")], ["Instituição", m.instituicao],
-    ["Modalidade", m.modalidade], ["Região", m.regiao], ["Incidência", m.incidencia],
+    ["Modalidade", m.modalidade], ["Região (DICOM)", m.regiao], ["Incidência", m.incidencia],
+    ["Lateralidade", m.lateralidade],
     ["Descrição", m.descricao_estudo], ["Fabricante", m.fabricante],
     ["Dimensões", m.colunas && m.linhas ? `${m.colunas} × ${m.linhas} px` : null],
     ["Espaçamento", m.espacamento_mm ? `${m.espacamento_mm.map((v) => v.toFixed(3)).join(" × ")} mm` : null],
@@ -291,7 +336,7 @@ function preencherExame() {
   const linhas = [
     ["Classificador", mod.classificador], ["Segmentação", mod.segmentacao || "não utilizada"],
     ["TorchXRayVision", mod.versao_torchxrayvision], ["Dispositivo", mod.dispositivo],
-    ["Limiares", `positivo ≥ ${pct(lim.positivo)} · indeterminado ≥ ${pct(lim.indeterminado)}`],
+    ["Limiares", nuvem() ? null : `positivo ≥ ${pct(lim.positivo)} · indeterminado ≥ ${pct(lim.indeterminado)}`],
     ["Tempo de análise", `${estado.dados.tempo_s.toFixed(1)} s`],
   ].filter(([, v]) => v);
   $("dados-modelo").replaceChildren(...linhas.flatMap(([r, v]) => [el("dt", {}, r), el("dd", {}, v)]));
@@ -399,7 +444,7 @@ function desenhar() {
       if (!a.regioes.length) return;
       ctx.globalAlpha = alfaDe(a);
       const [x, y] = a.regioes[0].caixa;
-      rotulo(`${a.nome} ${pct(a.escore)}`, x, y - 4 / z, a.cor);
+      rotulo(`${a.nome} ${textoEscore(a)}`.trim(), x, y - 4 / z, a.cor);
     });
     ctx.globalAlpha = 1;
   }
@@ -471,7 +516,7 @@ function mostrarDica(ev) {
   aplicarTransformacao();
   const encontrados = achadosVisiveis().filter((a) => a.regioes.some((reg) => ctx.isPointInPath(caminho(reg.contorno), px, py)));
   if (!encontrados.length) { dica.hidden = true; return; }
-  dica.textContent = encontrados.map((a) => `${a.nome} — ${pct(a.escore)} (${STATUS[a.status].toLowerCase()})`).join(" · ");
+  dica.textContent = encontrados.map((a) => `${a.nome} — ${textoEscore(a)} (${STATUS[a.status].toLowerCase()})`).join(" · ");
   dica.style.left = `${ev.clientX - r.left}px`;
   dica.style.top = `${ev.clientY - r.top}px`;
   dica.hidden = false;
@@ -514,6 +559,9 @@ $("arquivo").addEventListener("change", (ev) => {
   ev.target.value = "";
 });
 $("btn-forcar").addEventListener("click", () => { if (estado.arquivo) analisar(estado.arquivo, true); });
+$("btn-erro-config").addEventListener("click", () => { esconderErro(); abrirConfiguracoes(); });
+$("btn-exemplo").addEventListener("click", analisarExemplo);
+$("btn-config").addEventListener("click", abrirConfiguracoes);
 $("btn-fechar-erro").addEventListener("click", esconderErro);
 
 ["dragenter", "dragover"].forEach((t) => area.addEventListener(t, (ev) => { ev.preventDefault(); area.classList.add("sobre"); }));
@@ -531,5 +579,72 @@ $("ed-revisor").addEventListener("input", atualizarSelo);
 
 new ResizeObserver(() => { redimensionarTela(); desenhar(); }).observe(area);
 
-redimensionarTela();
-selecionarAba("achados");
+// ------------------------------------------------------------------------ //
+// Configurações (aplicativo desktop / servidor com preferências)
+// ------------------------------------------------------------------------ //
+async function abrirConfiguracoes() {
+  const resp = await fetch("/api/configuracoes");
+  if (!resp.ok) return;
+  const c = await resp.json();
+  $("cfg-nuvem").checked = c.usar_nuvem;
+  $("cfg-chave").value = "";
+  $("cfg-remover-chave").checked = false;
+  $("cfg-chave-status").textContent = c.chave_configurada
+    ? `Chave configurada${c.chave_final ? ` (termina em ${c.chave_final})` : " (variável de ambiente)"}. Deixe em branco para manter.`
+    : "Nenhuma chave configurada.";
+  $("cfg-modelo").value = c.modelo_nuvem;
+  $("cfg-instituicao").value = c.nome_instituicao || "";
+  $("cfg-anonimizar").checked = c.anonimizar;
+  $("cfg-lim-pos").value = Math.round(c.limiar_positivo * 100);
+  $("cfg-lim-ind").value = Math.round(c.limiar_indeterminado * 100);
+  $("cfg-erro").hidden = true;
+  $("dlg-config").showModal();
+}
+
+$("form-config").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const valores = {
+    usar_nuvem: $("cfg-nuvem").checked,
+    chave_api: $("cfg-chave").value.trim(),
+    remover_chave: $("cfg-remover-chave").checked,
+    modelo_nuvem: $("cfg-modelo").value,
+    nome_instituicao: $("cfg-instituicao").value.trim(),
+    anonimizar: $("cfg-anonimizar").checked,
+    limiar_positivo: Number($("cfg-lim-pos").value) / 100,
+    limiar_indeterminado: Number($("cfg-lim-ind").value) / 100,
+  };
+  const resp = await fetch("/api/configuracoes", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(valores),
+  });
+  if (!resp.ok) {
+    const corpo = await resp.json().catch(() => ({}));
+    $("cfg-erro").textContent = (typeof corpo.detail === "string" ? corpo.detail : corpo.detail?.mensagem) || "Falha ao salvar.";
+    $("cfg-erro").hidden = false;
+    return;
+  }
+  const c = await resp.json();
+  $("opt-anonimizar").checked = c.anonimizar;
+  if (estado.status) estado.status.nuvem = c.usar_nuvem;
+  $("dlg-config").close();
+});
+$("cfg-cancelar").addEventListener("click", () => $("dlg-config").close());
+
+async function iniciar() {
+  redimensionarTela();
+  selecionarAba("achados");
+  try {
+    estado.status = await (await fetch("/api/status")).json();
+  } catch {
+    return;
+  }
+  const seletor = $("opt-regiao");
+  estado.status.regioes.forEach((r) => seletor.append(el("option", { value: r.chave }, r.nome)));
+  $("btn-config").hidden = !estado.status.configuravel;
+  $("btn-exemplo").hidden = !estado.status.exemplo || !!estado.dados;
+  if (estado.status.configuravel) {
+    const resp = await fetch("/api/configuracoes");
+    if (resp.ok) $("opt-anonimizar").checked = (await resp.json()).anonimizar;
+  }
+}
+
+iniciar();

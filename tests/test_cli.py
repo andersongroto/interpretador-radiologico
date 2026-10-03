@@ -44,3 +44,17 @@ def test_limiares_invalidos(caminho_dicom, capsys):
 
 def test_nenhum_arquivo(tmp_path):
     assert main(["analisar", str(tmp_path / "nao_existe.dcm")]) == 1
+
+
+def test_nuvem_pela_linha_de_comando(tmp_path, caminho_dicom, capsys, monkeypatch):
+    from .conftest import MotorNuvemFalso
+
+    monkeypatch.setattr(modulo_analisador, "MotorNuvem", lambda config: MotorNuvemFalso())
+    caminho = caminho_dicom("mao.dcm", regiao="HAND")
+    assert main(["analisar", str(caminho), "-o", str(tmp_path), "-f", "txt", "-q"]) == 1  # sem --nuvem
+    assert "IA em nuvem" in capsys.readouterr().err
+    assert main(["analisar", str(caminho), "-o", str(tmp_path), "-f", "txt", "--nuvem",
+                 "--regiao", "joelho"]) == 0
+    texto = (tmp_path / "mao_laudo.txt").read_text(encoding="utf-8")
+    assert "LAUDO DE RADIOGRAFIA DO JOELHO DIREITO" in texto
+    assert "Fratura do planalto tibial lateral direito." in texto

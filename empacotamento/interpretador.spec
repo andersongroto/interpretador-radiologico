@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Especificação do PyInstaller para o executável do Windows (modo pasta).
 # Uso: pyinstaller empacotamento/interpretador.spec --noconfirm
+import importlib.util
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
@@ -14,13 +15,21 @@ datas += collect_data_files("torchxrayvision", excludes=["data/**", "**/__pycach
 datas += collect_data_files("reportlab")
 datas += collect_data_files("certifi")
 for distribuicao in ("pydicom", "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg",
-                     "torchxrayvision", "anthropic"):
+                     "torchxrayvision", "anthropic", "imageio", "scikit-image", "torch",
+                     "torchvision", "tqdm", "requests", "numpy", "pillow", "fastapi",
+                     "starlette", "uvicorn", "pydantic", "reportlab"):
     datas += copy_metadata(distribuicao)
 
 # Pesos dos modelos e exame de exemplo (preparados antes do build).
 recursos = EMPACOTAMENTO / "recursos"
 if recursos.is_dir():
     datas.append((str(recursos), "recursos"))
+
+# Extensões nativas carregadas via torch.ops.load_library (ex.: _C_stable no torchvision
+# >= 0.29), que o hook padrão do PyInstaller não encontra.
+_torchvision = Path(importlib.util.find_spec("torchvision").origin).parent
+binaries = [(str(arquivo), "torchvision") for arquivo in _torchvision.iterdir()
+            if arquivo.suffix.lower() in (".so", ".pyd", ".dll", ".dylib")]
 
 hiddenimports = []
 hiddenimports += collect_submodules("interpretador_radiologico")
@@ -32,7 +41,7 @@ hiddenimports += ["pylibjpeg", "libjpeg", "openjpeg", "multipart", "python_multi
 a = Analysis(
     [str(EMPACOTAMENTO / "lancador.py")],
     pathex=[str(RAIZ / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
