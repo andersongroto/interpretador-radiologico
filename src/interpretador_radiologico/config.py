@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -38,6 +38,15 @@ class Configuracao:
     anonimizar: bool = False
     #: Nome do serviço exibido no cabeçalho do laudo (usa o do DICOM se None).
     nome_instituicao: str | None = None
+    #: Região anatômica informada pelo usuário (chave de ``regioes.REGIOES``);
+    #: None = identificação automática.
+    regiao: str | None = None
+    #: Habilita o motor de IA em nuvem (Claude) para regiões sem modelo local.
+    #: Envia à API da Anthropic apenas os pixels da imagem (sem metadados DICOM).
+    usar_nuvem: bool = False
+    #: Chave da API da Anthropic (se None, usa ANTHROPIC_API_KEY do ambiente).
+    chave_api: str | None = field(default=None, repr=False)
+    modelo_nuvem: str = "claude-opus-5-5"
 
     def __post_init__(self) -> None:
         if not 0.0 < self.limiar_indeterminado <= self.limiar_positivo < 1.0:

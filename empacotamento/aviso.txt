@@ -1,0 +1,13 @@
+﻿INTERPRETADOR RADIOLÓGICO — AVISO IMPORTANTE
+
+Este programa é uma ferramenta de APOIO À DECISÃO baseada em inteligência artificial.
+
+• Não é um dispositivo médico certificado e não substitui a avaliação de médico(a) radiologista.
+• Todo pré-laudo gerado deve ser revisado, corrigido e assinado por profissional habilitado.
+• O uso clínico no Brasil exige regularização na ANVISA (software como dispositivo médico, RDC nº 657/2022).
+
+Funcionamento:
+• Radiografias de tórax são analisadas por modelos locais, no próprio computador, sem envio de dados.
+• As demais regiões (membros, coluna, crânio, abdome, bacia, etc.) são interpretadas pelo módulo opcional de IA em nuvem (Claude, da Anthropic), que só funciona após você habilitá-lo nas Configurações e informar uma chave de API. Nesse caso, apenas os pixels da imagem e dados não identificáveis (idade, sexo, região, incidência) são enviados. Atenção: textos gravados na própria imagem (ex.: nome do paciente) também seriam enviados.
+
+Ao continuar, você declara estar ciente destas condições.

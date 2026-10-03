@@ -12,3 +12,7 @@ venv/
 *.dicom
 saida/
 resultados/
+
+# Empacotamento
+empacotamento/recursos/
+*.spec.bak

@@ -8,7 +8,7 @@ AVISO: ferramenta de pesquisa/apoio. Não é um dispositivo médico certificado 
 não substitui a avaliação de um(a) médico(a) radiologista.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 AVISO_LEGAL = (
     "Laudo gerado automaticamente por sistema de inteligência artificial para "

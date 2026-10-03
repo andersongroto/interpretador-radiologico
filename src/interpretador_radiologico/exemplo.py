@@ -98,6 +98,18 @@ def imagem_para_dicom(
     return ds
 
 
+def imagem_sintetica(tamanho: int = 512) -> np.ndarray:
+    """Imagem uint8 grosseiramente semelhante a um tórax (para autoteste sem rede)."""
+    yy, xx = np.mgrid[0:tamanho, 0:tamanho] / tamanho
+    img = np.full((tamanho, tamanho), 175.0)
+    for cx in (0.30, 0.70):
+        pulmao = ((xx - cx) / 0.15) ** 2 + ((yy - 0.45) / 0.28) ** 2 <= 1
+        img[pulmao] -= 110
+    coracao = ((xx - 0.56) / 0.14) ** 2 + ((yy - 0.62) / 0.10) ** 2 <= 1
+    img[coracao] += 50
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
 def baixar_exemplo(destino: str | Path = ".", url: str = URL_EXEMPLO, timeout: float = 60.0) -> Path:
     """Baixa uma radiografia pública de tórax e a salva como DICOM de exemplo."""
     destino = Path(destino)

@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .. import AVISO_LEGAL, __version__
+from .. import AVISO_LEGAL, __version__, preferencias
 from ..analisador import AnalisadorTorax, ExameIncompativel
 from ..dicom_io import ErroLeitura, carregar_exame
 from ..pipeline import Saidas, nome_base, processar
@@ -43,9 +43,20 @@ def _carga_util(identificador: str, saidas: Saidas) -> dict:
     }
 
 
-def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 20) -> FastAPI:
-    """Cria a aplicação FastAPI. Os resultados ficam apenas em memória."""
+def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 20,
+              exemplo: Path | None = None,
+              preferencias_caminho: str | Path | bool | None = None) -> FastAPI:
+    """Cria a aplicação FastAPI. Os resultados ficam apenas em memória.
+
+    ``exemplo``: DICOM de demonstração oferecido na interface.
+    ``preferencias_caminho``: habilita a tela de configurações persistentes
+    (True = local padrão no perfil do usuário).
+    """
     analisador = analisador or AnalisadorTorax()
+    caminho_prefs = None
+    if preferencias_caminho:
+        caminho_prefs = (preferencias.caminho_padrao() if preferencias_caminho is True
+                         else Path(preferencias_caminho))
     app = FastAPI(title="Interpretador Radiológico", version=__version__,
                   description="Interpretação assistida por IA de radiografias de tórax em DICOM.")
     resultados: OrderedDict[str, Saidas] = OrderedDict()
@@ -84,15 +95,14 @@ def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 2
             "modelo": cfg.modelo,
             "segmentacao": cfg.usar_segmentacao,
             "limiares": {"positivo": cfg.limiar_positivo, "indeterminado": cfg.limiar_indeterminado},
+            "exemplo": exemplo is not None,
+            "configuravel": caminho_prefs is not None,
             "aviso_legal": AVISO_LEGAL,
         }
 
-    @app.post("/api/analisar")
-    def analisar(arquivo: UploadFile = File(...), forcar: bool = Form(False),
-                 anonimizar: bool = Form(False)) -> JSONResponse:
-        dados = arquivo.file.read()
+    def executar(dados: bytes, nome: str, forcar: bool, anonimizar: bool) -> JSONResponse:
         try:
-            exame = carregar_exame(dados, arquivo.filename or "exame")
+            exame = carregar_exame(dados, nome)
             config = replace(analisador.config, forcar=forcar or analisador.config.forcar,
                              anonimizar=anonimizar or analisador.config.anonimizar)
             saidas = processar(exame, analisador, config=config)
@@ -101,6 +111,35 @@ def criar_app(analisador: AnalisadorTorax | None = None, max_resultados: int = 2
         except ExameIncompativel as exc:
             raise HTTPException(422, str(exc)) from exc
         return JSONResponse(_carga_util(guardar(saidas), saidas))
+
+    @app.post("/api/analisar")
+    def analisar(arquivo: UploadFile = File(...), forcar: bool = Form(False),
+                 anonimizar: bool = Form(False)) -> JSONResponse:
+        return executar(arquivo.file.read(), arquivo.filename or "exame", forcar, anonimizar)
+
+    @app.post("/api/exemplo")
+    def analisar_exemplo(anonimizar: bool = Form(False)) -> JSONResponse:
+        if exemplo is None:
+            raise HTTPException(404, "Nenhum exame de exemplo disponível.")
+        return executar(Path(exemplo).read_bytes(), Path(exemplo).name, False, anonimizar)
+
+    @app.get("/api/configuracoes")
+    def obter_configuracoes() -> dict:
+        if caminho_prefs is None:
+            raise HTTPException(404, "Configurações não editáveis neste modo de execução.")
+        return preferencias.carregar(caminho_prefs).publicas()
+
+    @app.put("/api/configuracoes")
+    def salvar_configuracoes(valores: dict = Body(...)) -> dict:
+        if caminho_prefs is None:
+            raise HTTPException(404, "Configurações não editáveis neste modo de execução.")
+        try:
+            prefs = preferencias.carregar(caminho_prefs).atualizar(valores)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"Configuração inválida: {exc}") from exc
+        preferencias.salvar(prefs, caminho_prefs)
+        analisador.config = prefs.aplicar(analisador.config)
+        return prefs.publicas()
 
     @app.get("/api/resultados/{identificador}/anotada.png")
     def imagem_anotada(identificador: str) -> Response:
