@@ -45,6 +45,8 @@ funciona sem internet para tórax. Configurações e registros ficam em
 3. Abra o exame. A região é identificada pelo DICOM; se faltar essa informação, escolha-a no
    seletor **Região** (ou deixe em "Automática" para a IA identificá-la).
 
+![Tela de configurações](docs/configuracoes.png)
+
 Privacidade: para a nuvem são enviados **apenas os pixels da imagem** e dados não identificáveis
 (região, incidência, lado, sexo e idade) — nunca nome, ID, datas ou nº de acesso. Atenção: textos
 gravados na própria imagem (ex.: nome do paciente "queimado" nos pixels) seguem junto com ela.
