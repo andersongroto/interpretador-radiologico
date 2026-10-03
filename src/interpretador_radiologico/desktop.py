@@ -27,12 +27,14 @@ log = logging.getLogger("interpretador_radiologico.desktop")
 
 
 def diretorio_recursos() -> Path | None:
-    """Pasta com pesos e exemplo embutidos no executável (None fora do executável)."""
-    base = getattr(sys, "_MEIPASS", None)
-    if base:
-        return Path(base) / "recursos"
-    local = Path(__file__).resolve().parents[2] / "empacotamento" / "recursos"
-    return local if local.exists() else None
+    """Pasta com pesos e exemplo instalados junto do executável (None se ausente)."""
+    candidatos = []
+    if getattr(sys, "frozen", False):
+        candidatos.append(Path(sys.executable).resolve().parent / "recursos")
+        if getattr(sys, "_MEIPASS", None):
+            candidatos.append(Path(sys._MEIPASS) / "recursos")
+    candidatos.append(Path(__file__).resolve().parents[2] / "empacotamento" / "recursos")
+    return next((c for c in candidatos if c.is_dir()), None)
 
 
 def pesos_embutidos() -> str | None:

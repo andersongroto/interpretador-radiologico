@@ -44,6 +44,17 @@ jobs:
       - name: Gerar executável (PyInstaller)
         run: pyinstaller empacotamento/interpretador.spec --noconfirm --distpath dist --workpath build
 
+      - name: Copiar e verificar recursos (pesos e exemplo)
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse -Force empacotamento\recursos dist\InterpretadorRadiologico\recursos
+          foreach ($pasta in "empacotamento\recursos", "dist\InterpretadorRadiologico\recursos") {
+            Get-ChildItem -Recurse -File $pasta | ForEach-Object {
+              "{0}  {1:N0} bytes  {2}" -f $_.FullName, $_.Length, (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            }
+          }
+          python empacotamento/verificar_pesos.py dist/InterpretadorRadiologico/recursos/pesos
+
       - name: Autoteste do executável
         shell: pwsh
         timeout-minutes: 10

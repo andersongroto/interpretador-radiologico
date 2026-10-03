@@ -20,10 +20,8 @@ for distribuicao in ("pydicom", "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-ope
                      "starlette", "uvicorn", "pydantic", "reportlab"):
     datas += copy_metadata(distribuicao)
 
-# Pesos dos modelos e exame de exemplo (preparados antes do build).
-recursos = EMPACOTAMENTO / "recursos"
-if recursos.is_dir():
-    datas.append((str(recursos), "recursos"))
+# Os pesos dos modelos e o exame de exemplo (empacotamento/recursos) não entram no
+# pacote do PyInstaller: são copiados para dist/InterpretadorRadiologico/recursos.
 
 # Extensões nativas carregadas via torch.ops.load_library (ex.: _C_stable no torchvision
 # >= 0.29), que o hook padrão do PyInstaller não encontra.

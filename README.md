@@ -181,6 +181,7 @@ pip install ".[desktop,empacotamento]"
 interpretador-radiologico baixar-modelos --pesos empacotamento\recursos\pesos
 interpretador-radiologico exemplo -o empacotamento\recursos
 pyinstaller empacotamento\interpretador.spec --noconfirm
+xcopy /E /I empacotamento\recursos dist\InterpretadorRadiologico\recursos
 dist\InterpretadorRadiologico\InterpretadorRadiologico.exe --autoteste %TEMP%\autoteste
 "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" /DVersaoApp=0.2.0 empacotamento\instalador.iss
 ```
