@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import pickle
+import shutil
 import threading
 import time
+import urllib.request
 import warnings
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 import cv2
@@ -26,6 +32,8 @@ from .resultado import (INDETERMINADO, MOTOR_LOCAL, MOTOR_NUVEM, NEGATIVO, POSIT
 # Deslocamentos (em pixels na entrada 224x224) usados para refinar os mapas de
 # ativação: a rede tem passo de 32 px, então deslocar meia célula e calcular a
 # média dos mapas realinhados dobra a resolução efetiva da localização.
+log = logging.getLogger(__name__)
+
 DESLOCAMENTOS_REFINO = tuple((dy, dx) for dy in (-16, 0, 16) for dx in (-16, 0, 16))
 
 
@@ -114,6 +122,46 @@ def redimensionar_para_exibicao(imagem: np.ndarray, tamanho_maximo: int) -> tupl
 # Modelos
 # --------------------------------------------------------------------------- #
 
+URL_PESOS_PSPNET = ("https://github.com/mlmed/torchxrayvision/releases/download/v1/"
+                    "pspnet_chestxray_best_model_4.pth")
+
+
+def baixar_pesos(url: str, destino: Path, timeout: float = 120.0) -> Path:
+    """Baixa um arquivo de forma atômica (arquivo temporário + verificação de tamanho)."""
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    parcial = destino.with_name(destino.name + ".parcial")
+    log.info("Baixando %s", url)
+    with urllib.request.urlopen(url, timeout=timeout) as resposta, open(parcial, "wb") as saida:  # noqa: S310
+        esperado = int(resposta.headers.get("Content-Length") or 0)
+        shutil.copyfileobj(resposta, saida, 1024 * 1024)
+    if esperado and parcial.stat().st_size != esperado:
+        parcial.unlink(missing_ok=True)
+        raise OSError(f"Download incompleto de {url} ({parcial.stat().st_size if parcial.exists() else 0}"
+                      f" de {esperado} bytes).")
+    parcial.replace(destino)
+    return destino
+
+
+def carregar_com_pesos(url: str, pasta: Path, construir):
+    """Garante o arquivo de pesos (baixando se preciso) e constrói o modelo.
+
+    Um arquivo corrompido (ex.: download interrompido) é baixado novamente
+    uma vez, quando a pasta permite escrita.
+    """
+    arquivo = pasta / Path(url).name
+    if not arquivo.is_file():
+        baixar_pesos(url, arquivo)
+    try:
+        return construir()
+    except (RuntimeError, EOFError, pickle.UnpicklingError, OSError) as exc:
+        if not os.access(pasta, os.W_OK):
+            raise RuntimeError(f"Arquivo de pesos corrompido: {arquivo}. Reinstale o programa.") from exc
+        log.warning("Arquivo de pesos inválido (%s); baixando novamente: %s", exc, arquivo)
+        arquivo.unlink(missing_ok=True)
+        baixar_pesos(url, arquivo)
+        return construir()
+
+
 class Modelos(Protocol):
     def classificar(self, entrada: np.ndarray, refinar: bool) -> tuple[list[str], np.ndarray, np.ndarray]:
         """Recebe imagem 224x224 [0, 1]; retorna (rótulos, escores [K], mapas [K, 224, 224])."""
@@ -151,11 +199,20 @@ class ModelosTorchXRayVision:
         self._segmentador = None
 
     @property
+    def pasta_pesos(self) -> Path:
+        import torchxrayvision as xrv
+
+        return Path(self.config.diretorio_pesos or xrv.utils.get_cache_dir()).expanduser()
+
+    @property
     def classificador(self):
         if self._classificador is None:
             import torchxrayvision as xrv
 
-            modelo = xrv.models.DenseNet(weights=self.config.modelo, cache_dir=self.config.diretorio_pesos)
+            url = xrv.models.model_urls[self.config.modelo]["weights_url"]
+            modelo = carregar_com_pesos(
+                url, self.pasta_pesos,
+                lambda: xrv.models.DenseNet(weights=self.config.modelo, cache_dir=str(self.pasta_pesos)))
             self._classificador = modelo.to(self.dispositivo).eval()
         return self._classificador
 
@@ -164,7 +221,9 @@ class ModelosTorchXRayVision:
         if self._segmentador is None:
             import torchxrayvision as xrv
 
-            modelo = xrv.baseline_models.chestx_det.PSPNet(cache_dir=self.config.diretorio_pesos)
+            modelo = carregar_com_pesos(
+                URL_PESOS_PSPNET, self.pasta_pesos,
+                lambda: xrv.baseline_models.chestx_det.PSPNet(cache_dir=str(self.pasta_pesos)))
             self._segmentador = modelo.to(self.dispositivo).eval()
         return self._segmentador
 

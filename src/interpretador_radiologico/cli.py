@@ -192,8 +192,21 @@ def criar_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _console_tolerante() -> None:
+    """Evita falhas ao imprimir caracteres fora da codificação do console (ex.: cp1252 no Windows)."""
+    for fluxo in (sys.stdout, sys.stderr):
+        if fluxo is not None and hasattr(fluxo, "reconfigure"):
+            try:
+                fluxo.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    _console_tolerante()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
     args = criar_parser().parse_args(argv)
     try:
         return args.funcao(args)

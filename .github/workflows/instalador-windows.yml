@@ -18,6 +18,11 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 120
+    env:
+      PYTHONUTF8: "1"
+    defaults:
+      run:
+        shell: bash  # interrompe o passo no primeiro comando que falhar
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +45,7 @@ jobs:
         run: |
           interpretador-radiologico baixar-modelos --pesos empacotamento/recursos/pesos
           interpretador-radiologico exemplo -o empacotamento/recursos
+          python empacotamento/verificar_pesos.py empacotamento/recursos/pesos
 
       - name: Gerar executável (PyInstaller)
         run: pyinstaller empacotamento/interpretador.spec --noconfirm --distpath dist --workpath build
@@ -47,6 +53,8 @@ jobs:
       - name: Copiar e verificar recursos (pesos e exemplo)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           Copy-Item -Recurse -Force empacotamento\recursos dist\InterpretadorRadiologico\recursos
           foreach ($pasta in "empacotamento\recursos", "dist\InterpretadorRadiologico\recursos") {
             Get-ChildItem -Recurse -File $pasta | ForEach-Object {
@@ -71,6 +79,8 @@ jobs:
       - name: Gerar instalador (Inno Setup)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           $versao = python -c "import interpretador_radiologico as m; print(m.__version__)"
