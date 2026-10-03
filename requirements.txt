@@ -1,0 +1,18 @@
+# Dependências de execução (equivalentes às do pyproject.toml).
+# Para instalar o PyTorch apenas para CPU (download bem menor), rode antes:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+numpy>=1.24
+pydicom>=3.0
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
+pylibjpeg-openjpeg>=2.0
+opencv-python-headless>=4.8
+pillow>=10.0
+torch>=2.1
+torchvision>=0.16
+torchxrayvision>=1.2
+scikit-image>=0.21
+reportlab>=4.0
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9

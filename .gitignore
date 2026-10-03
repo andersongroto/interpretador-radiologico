@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Exames e saídas locais: podem conter dados de pacientes (LGPD)
+*.dcm
+*.dicom
+saida/
+resultados/

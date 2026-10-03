@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interpretador Radiológico</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e3a5f'/%3E%3Cpath d='M16 6v9M16 15c-2 0-3 1-5 2-2 2-3 6-3 8 0 2 2 2 4 1 2-1 4-3 4-6zM16 15c2 0 3 1 5 2 2 2 3 6 3 8 0 2-2 2-4 1-2-1-4-3-4-6z' fill='none' stroke='%2390caf9' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+<header class="topo">
+  <div class="marca">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 5v10M16 15c-2 0-3 1-5 2-2 2-3.5 6-3.5 8.5 0 2 2 2.2 4 1.2 2.2-1.1 4.5-3.5 4.5-6.7zM16 15c2 0 3 1 5 2 2 2 3.5 6 3.5 8.5 0 2-2 2.2-4 1.2-2.2-1.1-4.5-3.5-4.5-6.7z"/></svg>
+    <div>
+      <h1>Interpretador Radiológico</h1>
+      <p>Radiografia de tórax · apoio à decisão por IA</p>
+    </div>
+  </div>
+  <div class="acoes-topo">
+    <label class="opcao" title="Remove nome, ID, data de nascimento e nº de acesso das saídas">
+      <input type="checkbox" id="opt-anonimizar"> Anonimizar
+    </label>
+    <button class="botao primario" id="btn-abrir" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+      Abrir exame
+    </button>
+    <input type="file" id="arquivo" accept=".dcm,.dicom,.dic,application/dicom,image/png,image/jpeg,image/tiff" hidden>
+  </div>
+</header>
+
+<main class="principal">
+  <section class="visualizador" aria-label="Visualizador da radiografia">
+    <div class="ferramentas" role="toolbar" aria-label="Camadas e ajustes">
+      <div class="grupo">
+        <button class="alternar" data-camada="mapas" aria-pressed="true" type="button">Mapas de calor</button>
+        <button class="alternar" data-camada="contornos" aria-pressed="true" type="button">Contornos</button>
+        <button class="alternar" data-camada="rotulos" aria-pressed="true" type="button">Rótulos</button>
+        <button class="alternar" data-camada="ict" aria-pressed="true" type="button">ICT</button>
+        <button class="alternar" data-camada="anatomia" aria-pressed="false" type="button">Anatomia</button>
+      </div>
+      <div class="grupo controles">
+        <label>Opacidade <input type="range" id="rng-opacidade" min="0" max="1" step="0.05" value="0.55"></label>
+        <label>Brilho <input type="range" id="rng-brilho" min="0.4" max="1.8" step="0.05" value="1"></label>
+        <label>Contraste <input type="range" id="rng-contraste" min="0.4" max="2.2" step="0.05" value="1"></label>
+        <button class="alternar" id="btn-inverter" aria-pressed="false" type="button" title="Inverter tons de cinza">Inverter</button>
+        <button class="botao icone" id="btn-ajustar" type="button" title="Ajustar à tela (duplo clique)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="area" id="area">
+      <canvas id="tela"></canvas>
+      <div class="dica" id="dica" hidden></div>
+      <button class="soltar" id="soltar" type="button">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="8" y="6" width="32" height="36" rx="4"/><path d="M24 30V16m0 0-6 6m6-6 6 6"/></svg>
+        <strong>Arraste um arquivo DICOM aqui</strong>
+        <span>ou clique para selecionar · radiografias de tórax PA/AP (.dcm)<br>PNG/JPEG também são aceitos para demonstração</span>
+      </button>
+      <div class="carregando" id="carregando" hidden>
+        <div class="giro"></div>
+        <p>Analisando radiografia…</p>
+        <small>Classificação, localização dos achados e segmentação anatômica</small>
+      </div>
+    </div>
+    <div class="erro" id="erro" role="alert" hidden>
+      <span id="erro-texto"></span>
+      <button class="botao pequeno" id="btn-forcar" type="button" hidden>Analisar mesmo assim</button>
+      <button class="fechar" id="btn-fechar-erro" type="button" aria-label="Fechar">×</button>
+    </div>
+  </section>
+
+  <aside class="painel" aria-label="Resultados">
+    <nav class="abas" role="tablist">
+      <button role="tab" data-aba="achados" aria-selected="true" type="button">Achados</button>
+      <button role="tab" data-aba="laudo" aria-selected="false" type="button">Laudo</button>
+      <button role="tab" data-aba="escores" aria-selected="false" type="button">Escores</button>
+      <button role="tab" data-aba="exame" aria-selected="false" type="button">Exame</button>
+    </nav>
+
+    <div class="conteudo" id="vazio">
+      <div class="vazio">
+        <h2>Nenhum exame carregado</h2>
+        <p>Abra uma radiografia de tórax em DICOM para obter:</p>
+        <ul>
+          <li>Classificação de 18 achados radiológicos</li>
+          <li>Marcação das regiões suspeitas na imagem</li>
+          <li>Índice cardiotorácico estimado</li>
+          <li>Pré-laudo estruturado editável (PDF, texto e DICOM)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="conteudo" id="aba-achados" role="tabpanel" hidden>
+      <div class="impressao" id="impressao"></div>
+      <div id="avisos-resumo"></div>
+      <h3 class="subtitulo">Achados detectados</h3>
+      <div id="lista-achados"></div>
+      <details class="negativos">
+        <summary>Achados avaliados sem alteração (<span id="n-negativos">0</span>)</summary>
+        <div id="lista-negativos"></div>
+      </details>
+    </div>
+
+    <div class="conteudo" id="aba-laudo" role="tabpanel" hidden>
+      <div class="selo" id="selo-laudo">Pré-laudo gerado por IA — revise e edite antes de emitir</div>
+      <dl class="cabecalho-laudo" id="cabecalho-laudo"></dl>
+      <form class="edicao" id="form-laudo" autocomplete="off">
+        <label>Técnica <textarea id="ed-tecnica" rows="3" readonly></textarea></label>
+        <label>Análise <small>uma linha por sistema: "Sistema: frases"</small><textarea id="ed-analise" rows="9"></textarea></label>
+        <label>Achados de baixa confiança <textarea id="ed-indeterminados" rows="2"></textarea></label>
+        <label>Medidas <textarea id="ed-medidas" rows="2"></textarea></label>
+        <label>Impressão diagnóstica <textarea id="ed-impressao" rows="3"></textarea></label>
+        <label>Recomendações <textarea id="ed-recomendacoes" rows="3"></textarea></label>
+        <label>Revisado por <small>nome e CRM do(a) médico(a)</small><input id="ed-revisor" placeholder="Ex.: Dra. Maria Souza — CRM-SP 123456"></label>
+      </form>
+      <div class="botoes">
+        <button class="botao primario" id="btn-pdf" type="button">Baixar PDF</button>
+        <button class="botao" id="btn-copiar" type="button">Copiar texto</button>
+        <button class="botao" id="btn-laudo-dcm" type="button">PDF em DICOM</button>
+        <button class="botao fantasma" id="btn-restaurar" type="button">Restaurar original</button>
+      </div>
+      <h3 class="subtitulo">Outras saídas</h3>
+      <div class="botoes">
+        <a class="botao" id="lnk-png" download>Imagem anotada (PNG)</a>
+        <a class="botao" id="lnk-dcm" download>Imagem anotada (DICOM)</a>
+        <a class="botao" id="lnk-json" download>Resultado (JSON)</a>
+      </div>
+    </div>
+
+    <div class="conteudo" id="aba-escores" role="tabpanel" hidden>
+      <p class="nota">Escores do classificador normalizados pelo ponto de operação de cada patologia
+        (50% = limiar ótimo do treinamento). Linhas verticais: limiares de <b>indeterminado</b> e <b>positivo</b>.</p>
+      <div id="lista-escores"></div>
+    </div>
+
+    <div class="conteudo" id="aba-exame" role="tabpanel" hidden>
+      <h3 class="subtitulo">Dados do exame</h3>
+      <dl class="tabela-dados" id="dados-exame"></dl>
+      <h3 class="subtitulo">Observações técnicas</h3>
+      <ul class="avisos" id="lista-avisos"></ul>
+      <h3 class="subtitulo">Modelos</h3>
+      <dl class="tabela-dados" id="dados-modelo"></dl>
+    </div>
+  </aside>
+</main>
+
+<footer class="rodape" id="rodape">
+  Ferramenta de apoio à decisão. Não é dispositivo médico certificado e não substitui a avaliação de médico(a) radiologista.
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

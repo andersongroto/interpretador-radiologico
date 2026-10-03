@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interpretador-radiologico"
+version = "0.1.0"
+description = "Interpretação assistida por IA de radiografias de tórax em DICOM: laudo estruturado e marcação dos achados na imagem."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Anderson Groto" }]
+dependencies = [
+    "numpy>=1.24",
+    "pydicom>=3.0",
+    "pylibjpeg>=2.0",
+    "pylibjpeg-libjpeg>=2.1",
+    "pylibjpeg-openjpeg>=2.0",
+    "opencv-python-headless>=4.8",
+    "pillow>=10.0",
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "torchxrayvision>=1.2",
+    "scikit-image>=0.21",
+    "reportlab>=4.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+interpretador-radiologico = "interpretador_radiologico.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+interpretador_radiologico = ["web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not modelo'"
+markers = [
+    "modelo: testes que executam os modelos de IA reais (baixam pesos na primeira execução)",
+]
