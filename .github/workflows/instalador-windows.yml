@@ -75,6 +75,9 @@ jobs:
           if ($p.ExitCode -ne 0) { Write-Error "Autoteste falhou (código $($p.ExitCode))"; exit 1 }
           Get-Content (Join-Path $saida "autoteste.txt")
           Get-ChildItem $saida
+          "### Autoteste do executável`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Get-Content (Join-Path $saida "autoteste.txt") | ForEach-Object { "- $_" } |
+            Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - name: Gerar instalador (Inno Setup)
         shell: pwsh
@@ -86,7 +89,10 @@ jobs:
           $versao = python -c "import interpretador_radiologico as m; print(m.__version__)"
           & $iscc "/DVersaoApp=$versao" empacotamento\instalador.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-ChildItem dist\*.exe | ForEach-Object { "{0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
+          $linhas = Get-ChildItem dist\*.exe | ForEach-Object { "- {0}: {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
+          $linhas
+          "`n### Instalador`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          $linhas | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
       - name: Publicar artefato
         uses: actions/upload-artifact@v4
@@ -95,6 +101,11 @@ jobs:
           path: dist/*.exe
           compression-level: 0
           retention-days: 30
+
+      - name: Resumo do autoteste
+        if: always()
+        shell: pwsh
+        run: Get-Content (Join-Path $env:RUNNER_TEMP "autoteste\autoteste.txt") -ErrorAction SilentlyContinue
 
       - name: Publicar release (apenas tags v*)
         if: startsWith(github.ref, 'refs/tags/v')
